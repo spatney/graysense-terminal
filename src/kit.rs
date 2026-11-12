@@ -61,6 +61,9 @@ pub mod icon {
     pub const REMOVE: &str = "\u{E738}";
     pub const BACK: &str = "\u{E72B}";
     pub const SPARKLE: &str = "\u{F4A5}";
+    pub const CODE: &str = "\u{E943}";
+    pub const MORE: &str = "\u{E712}";
+    pub const IMAGE: &str = "\u{E8B9}";
 }
 
 /// Flat surface with a 1px border.

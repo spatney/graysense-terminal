@@ -30,6 +30,23 @@ pub enum AgentAction {
     ForgetMemories(Vec<crate::memory::MemoryId>),
     /// Show the Memory panel (optionally focused on one memory).
     OpenMemory(Option<crate::memory::MemoryId>),
+    /// Folder actions from the header's path menu.
+    Folder(FolderAction),
+    /// Name the session (from the header title).
+    Rename(String),
+    /// Put an earlier message back in the composer to edit and resend.
+    EditPrompt(String),
+    /// From the Files tab.
+    File(super::files::FileAction),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderAction {
+    Reveal,
+    VsCode,
+    Terminal,
+    NewAgent,
+    CopyPath,
 }
 
 pub struct AgentCtx<'a> {
@@ -91,9 +108,16 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
     if btn(ui, slot(&mut right, 26.0), if cx.maximized { icon::BACK_TO_WINDOW } else { icon::FULLSCREEN }, "Maximize (Ctrl+Shift+Enter)", cx.maximized, "max").clicked() {
         out.push(AgentAction::Maximize);
     }
-    let dock_count = view.canvases.len() + view.apps.len();
-    if dock_count > 0 && btn(ui, slot(&mut right, 26.0), icon::DOCK, "Toggle canvas dock", view.dock_open, "dock").clicked() {
-        view.dock_open = !view.dock_open;
+    let files_tab = view.canvases.len() + view.apps.len();
+    let files_open = view.dock_open && view.dock_tab == files_tab;
+    if !view.deferred && btn(ui, slot(&mut right, 26.0), icon::FOLDER, "Files in this session's folder", files_open, "files").clicked() {
+        view.dock_open = !files_open;
+        view.dock_tab = files_tab;
+    }
+    let canvas_open = view.dock_open && view.dock_tab < files_tab;
+    if files_tab > 0 && btn(ui, slot(&mut right, 26.0), icon::DOCK, "Canvases and apps", canvas_open, "dock").clicked() {
+        view.dock_open = !canvas_open;
+        view.dock_tab = files_tab - 1;
     }
     let auto = view.auto_approve.load(std::sync::atomic::Ordering::Relaxed);
     if btn(ui, slot(&mut right, 26.0), icon::LIGHTNING, if auto { "Auto-approve is ON: tools run without asking" } else { "Auto-approve tool requests" }, auto, "auto").clicked() {
@@ -199,9 +223,44 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
     let status_g = kit::elided(&p, &status_text, ui_font(12.0), status_fg, (avail * 0.45).max(60.0));
     let show_status = avail > status_g.size().x + 120.0;
     let title_max = if show_status { avail - status_g.size().x - 10.0 } else { avail };
-    let title_g = kit::elided(&p, &view.display_title(), semibold(13.0), theme.text, title_max);
+    let title = view.display_title();
+    let title_g = kit::elided(&p, &title, semibold(13.0), theme.text, title_max);
     let mut lx = x;
     let tw = title_g.size().x;
+    // Click the title to rename the session.
+    let trect = Rect::from_min_size(pos2(lx - 4.0, cy - 11.0), vec2(tw + 8.0, 22.0));
+    let tresp = ui.interact(trect, ui.scope_id().with("title"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Rename");
+    tresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Rename “{title}”")));
+    if tresp.hovered() {
+        p.rect_filled(trect, CornerRadius::same(5), theme.surface2);
+    }
+    if tresp.clicked() {
+        view.rename_draft = Some(title.clone());
+    }
+    egui::Popup::menu(&tresp).width(300.0).show(|ui| {
+        ui.label(RichText::new("Rename session").font(semibold(12.5)));
+        let draft = view.rename_draft.get_or_insert_with(|| title.clone());
+        let r = ui.add(egui::TextEdit::singleline(draft).desired_width(f32::INFINITY).margin(Margin::symmetric(8, 5)));
+        if !r.has_focus() && !r.lost_focus() {
+            r.request_focus();
+        }
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.add_space(4.0);
+        let mut save = enter;
+        ui.horizontal(|ui| {
+            save |= kit::primary_button(ui, "Rename", theme).clicked();
+            if kit::ghost_button(ui, "Cancel", theme).clicked() {
+                view.rename_draft = None;
+                ui.close();
+            }
+        });
+        if save {
+            if let Some(name) = view.rename_draft.take() {
+                out.push(AgentAction::Rename(name.trim().to_owned()));
+            }
+            ui.close();
+        }
+    });
     p.galley(pos2(lx, cy - title_g.size().y / 2.0), title_g, theme.text);
     lx += tw + 10.0;
     if show_status {
@@ -211,9 +270,36 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
     }
     let cwd_room = right - 10.0 - lx;
     if cwd_room > 70.0 {
-        let cwd = crate::settings::short_path(&view.cwd);
-        let g = kit::elided(&p, &cwd, ui_font(11.5), theme.text_faint, cwd_room);
-        p.galley(pos2(lx, cy - g.size().y / 2.0), g, theme.text_faint);
+        if view.deferred {
+            let g = kit::elided(&p, "Gets its own folder when you send a message", ui_font(11.5), theme.text_faint, cwd_room);
+            p.galley(pos2(lx, cy - g.size().y / 2.0), g, theme.text_faint);
+        } else {
+            // The folder is a menu: open it in Explorer or VS Code, start a terminal or agent there.
+            let cwd = crate::settings::short_path(&view.cwd);
+            let g = kit::elided(&p, &cwd, ui_font(11.5), theme.text_faint, cwd_room - 8.0);
+            let prect = Rect::from_min_size(pos2(lx - 4.0, cy - 11.0), vec2(g.size().x + 8.0, 22.0));
+            let presp = ui.interact(prect, ui.scope_id().with("path"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(view.cwd.display().to_string());
+            presp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Folder {cwd}")));
+            if presp.hovered() {
+                p.rect_filled(prect, CornerRadius::same(5), theme.surface2);
+            }
+            p.galley(pos2(lx, cy - g.size().y / 2.0), g, if presp.hovered() { theme.text_dim } else { theme.text_faint });
+            egui::Popup::menu(&presp).width(230.0).show(|ui| {
+                let items = [
+                    (icon::FOLDER, "Open in File Explorer", FolderAction::Reveal),
+                    (icon::CODE, "Open in VS Code", FolderAction::VsCode),
+                    (icon::TERMINAL, "New terminal here", FolderAction::Terminal),
+                    (icon::BOT, "New agent in this folder", FolderAction::NewAgent),
+                    (icon::COPY, "Copy path", FolderAction::CopyPath),
+                ];
+                for (glyph, label, action) in items {
+                    if ui.button(format!("{glyph}   {label}")).clicked() {
+                        out.push(AgentAction::Folder(action));
+                        ui.close();
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -221,7 +307,10 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
 /// active MCP App view (so the app can position its webview), if any.
 pub fn body(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out: &mut Vec<AgentAction>) -> Option<(u64, Rect)> {
     let theme = cx.theme;
-    let dock_count = view.canvases.len() + view.apps.len();
+    // Tabs: canvases, then MCP apps, then the session's files (once it has a folder).
+    let has_folder = !view.deferred;
+    let files_tab = view.canvases.len() + view.apps.len();
+    let dock_count = files_tab + usize::from(has_folder);
     if dock_count == 0 {
         view.dock_open = false;
     }
@@ -264,6 +353,9 @@ pub fn body(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out: &
                     }
                     idx += 1;
                 }
+                if has_folder && ui.selectable_label(view.dock_tab == files_tab, format!("{}  Files", icon::FOLDER)).clicked() {
+                    view.dock_tab = files_tab;
+                }
             });
             view.dock_tab = view.dock_tab.min(dock_count.saturating_sub(1));
             ui.add_space(4.0);
@@ -282,6 +374,8 @@ pub fn body(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out: &
                 let r = ui.available_rect_before_wrap();
                 ui.allocate_rect(r, Sense::hover());
                 app_rect = Some((app.view, r));
+            } else if has_folder && let Some(a) = super::files::files_ui(ui, &mut view.files_state, &view.cwd, &view.files, theme) {
+                out.push(AgentAction::File(a));
             }
         });
     }
@@ -313,11 +407,11 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
     }
 
     let mut md = MdOut { open_url: None, copy: None };
-    egui::ScrollArea::vertical()
-        .id_salt(("scroll", view.bay))
-        .stick_to_bottom(true)
-        .auto_shrink([false; 2])
-        .show_viewport(ui, |ui, viewport| {
+    let mut area = egui::ScrollArea::vertical().id_salt(("scroll", view.bay)).stick_to_bottom(true).auto_shrink([false; 2]);
+    if std::mem::take(&mut view.scroll_to_end) {
+        area = area.vertical_scroll_offset(f32::MAX);
+    }
+    let output = area.show_viewport(ui, |ui, viewport| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let margin = 400.0;
             let mut y = 0.0;
@@ -349,6 +443,20 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
             }
             ui.add_space(8.0);
         });
+    // Scrolled up: a round "latest" button brings you back (and re-engages following).
+    let r = output.inner_rect;
+    if output.state.clamped_offset().y + r.height() < output.content_size.y - 32.0 {
+        let b = Rect::from_center_size(pos2(r.center().x, r.bottom() - 26.0), vec2(34.0, 34.0));
+        let resp = ui.interact(b, Id::unique(("to-latest", view.bay)), Sense::click()).on_hover_text("Scroll to the latest").on_hover_cursor(CursorIcon::PointingHand);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Scroll to the latest"));
+        let p = ui.painter();
+        p.circle(b.center(), 17.0, if resp.hovered() { theme.surface3 } else { theme.surface2 }, Stroke::new(1.0, theme.border_strong));
+        p.text(b.center(), Align2::CENTER_CENTER, icon::CHEVRON_DOWN, icon_font(11.0), theme.text);
+        if resp.clicked() {
+            view.scroll_to_end = true;
+            ui.ctx().request_repaint();
+        }
+    }
     if let Some(u) = md.open_url {
         out.push(AgentAction::OpenUrl(u));
     }
@@ -360,6 +468,14 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
 
 const SUGGESTIONS: [&str; 4] = ["Explain how this codebase is organized", "Find a bug and fix it", "Write tests for the recent changes", "Summarize the last 10 commits"];
 
+/// Starters for a session in its own, empty folder.
+const FRESH_SUGGESTIONS: [&str; 4] = [
+    "Build a to-do app as a single HTML file",
+    "Write a Python script that charts a CSV I attach",
+    "Research what's new in Rust this year and summarize it",
+    "Draft a project plan as a Markdown checklist",
+];
+
 /// Welcome state for a fresh agent: what it's working on and a few one-click starters.
 fn empty_state(ui: &mut Ui, view: &AgentView, cx: &AgentCtx, out: &mut Vec<AgentAction>) {
     let theme = cx.theme;
@@ -369,7 +485,12 @@ fn empty_state(ui: &mut Ui, view: &AgentView, cx: &AgentCtx, out: &mut Vec<Agent
     let p = ui.painter().clone();
     kit::mark(&p, c - vec2(0.0, 44.0), 34.0, theme);
     p.text(c, Align2::CENTER_CENTER, if booting { "Starting Copilot…" } else { "What should we build?" }, semibold(17.0), theme.text);
-    p.text(c + vec2(0.0, 25.0), Align2::CENTER_CENTER, format!("Working in {}", crate::settings::short_path(&view.cwd)), ui_font(12.5), theme.text_dim);
+    let sub = if view.deferred {
+        format!("Gets its own folder in {}", crate::settings::short_path(&view.cwd))
+    } else {
+        format!("Working in {}", crate::settings::short_path(&view.cwd))
+    };
+    p.text(c + vec2(0.0, 25.0), Align2::CENTER_CENTER, sub, ui_font(12.5), theme.text_dim);
     if booting {
         kit::spinner(&p, c + vec2(0.0, 58.0), 7.0, cx.t, theme.accent);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
@@ -382,7 +503,10 @@ fn empty_state(ui: &mut Ui, view: &AgentView, cx: &AgentCtx, out: &mut Vec<Agent
     // Suggestion chips, packed into centred rows.
     let font = ui_font(12.5);
     let max_w = (r.width() - 48.0).min(620.0);
-    let chips: Vec<(&str, f32)> = SUGGESTIONS.iter().map(|s| (*s, p.layout_no_wrap(s.to_string(), font.clone(), theme.text).size().x + 28.0)).collect();
+    let chips: Vec<(&str, f32)> = (if view.deferred { FRESH_SUGGESTIONS } else { SUGGESTIONS })
+        .iter()
+        .map(|s| (*s, p.layout_no_wrap(s.to_string(), font.clone(), theme.text).size().x + 28.0))
+        .collect();
     let mut rows: Vec<Vec<(&str, f32)>> = vec![Vec::new()];
     let mut row_w = 0.0;
     for (s, w) in chips {
@@ -509,14 +633,32 @@ fn item_ui(ui: &mut Ui, view: &mut AgentView, i: usize, cx: &AgentCtx, out: &mut
     let bay = view.bay;
     let mut resolved = false;
     let mut approval: Option<(Vec<String>, bool)> = None;
+    // Message actions (copy, edit, try again) show on hover, and always on the latest reply.
+    let latest = !view.items[i + 1..].iter().any(|x| matches!(x, Item::Assistant { .. } | Item::User { .. }));
+    let retry = (latest && !view.status.is_busy()).then(|| view.items[..i].iter().rev().find_map(|x| if let Item::User { text, .. } = x { Some(text.clone()) } else { None })).flatten();
+    let hover_id = Id::unique(("message-hover", bay, i));
+    let hovered = ui.ctx().data(|d| d.get_temp::<Rect>(hover_id)).is_some_and(|r| ui.rect_contains_pointer(r));
+    let top = ui.cursor().top();
     match &mut view.items[i] {
         Item::User { text, queued, files } => {
             Frame::new().fill(theme.accent_soft()).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
+                    ui.set_height(18.0);
                     ui.label(RichText::new("You").font(semibold(11.5)).color(theme.text_dim));
                     if *queued {
                         ui.label(RichText::new("· queued").font(ui_font(11.5)).color(theme.text_faint));
+                    }
+                    if hovered {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            if kit::icon_button_sized(ui, icon::COPY, "Copy", theme, 20.0, false).clicked() {
+                                out.push(AgentAction::Copy(text.clone()));
+                            }
+                            if kit::icon_button_sized(ui, icon::EDIT, "Edit and resend", theme, 20.0, false).clicked() {
+                                out.push(AgentAction::EditPrompt(text.clone()));
+                            }
+                        });
                     }
                 });
                 ui.add(egui::Label::new(RichText::new(text.as_str()).color(theme.text)).wrap());
@@ -538,6 +680,22 @@ fn item_ui(ui: &mut Ui, view: &mut AgentView, i: usize, cx: &AgentCtx, out: &mut
                 let a = 0.4 + 0.6 * (cx.t * 6.0).sin().abs();
                 ui.painter().rect_filled(Rect::from_min_size(r.min + vec2(0.0, 2.0), vec2(7.0, 12.0)), CornerRadius::same(1), with_alpha(theme.accent, a));
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+            } else if !text.trim().is_empty() {
+                // Space is reserved so the transcript doesn't jump when the actions appear.
+                ui.horizontal(|ui| {
+                    ui.set_height(24.0);
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if hovered || latest {
+                        if kit::icon_button_sized(ui, icon::COPY, "Copy", theme, 24.0, false).clicked() {
+                            out.push(AgentAction::Copy(text.clone()));
+                        }
+                        if let Some(prompt) = &retry
+                            && kit::icon_button_sized(ui, icon::REFRESH, "Try again", theme, 24.0, false).clicked()
+                        {
+                            out.push(AgentAction::Send(prompt.clone()));
+                        }
+                    }
+                });
             }
         }
         Item::Reasoning { text, done, open } => {
@@ -736,16 +894,27 @@ fn item_ui(ui: &mut Ui, view: &mut AgentView, i: usize, cx: &AgentCtx, out: &mut
                                 format!("Open {canvas} canvas{}", title.map(|t| format!(" · {t}")).unwrap_or_default())
                             }
                             "invoke_canvas_action" => format!("Run canvas action · {}", args.get("actionName").and_then(Value::as_str).unwrap_or("?")),
+                            "graysense_settings" => "Change Graysense settings".to_owned(),
+                            "graysense_mcp_servers" | "graysense_plugins" => {
+                                let action = args.get("action").and_then(Value::as_str).unwrap_or("change");
+                                let what = if tool == "graysense_plugins" { "plugin" } else { "MCP server" };
+                                let name = args.get("name").or_else(|| args.get("source")).and_then(Value::as_str).unwrap_or_default();
+                                format!("{} {what} {name}", super::tool_verb(action))
+                            }
                             _ => super::tool_verb(&tool),
                         };
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(headline).font(semibold(12.5)).color(theme.text));
                             ui.label(RichText::new(&tool).font(mono(11.5)).color(theme.text_faint));
                         });
-                        if let Some(d) = s("toolDescription") {
+                        if let Some(d) = s("toolDescription").filter(|_| !tool.starts_with("graysense_")) {
                             ui.label(RichText::new(d).font(ui_font(12.0)).color(theme.text_dim));
                         }
-                        let args = json_preview(&args);
+                        let changes = args.get("changes").and_then(Value::as_object).filter(|_| tool == "graysense_settings");
+                        let args = match changes {
+                            Some(ch) => ch.iter().map(|(k, v)| format!("{k}  →  {}", if v.is_null() { "default".to_owned() } else { v.to_string() })).collect::<Vec<_>>().join("\n"),
+                            None => json_preview(&args),
+                        };
                         if !args.is_empty() {
                             mono_box(ui, &args, theme, 140.0, Id::unique(("perm-args", bay, i)), false);
                         }
@@ -1059,6 +1228,10 @@ fn item_ui(ui: &mut Ui, view: &mut AgentView, i: usize, cx: &AgentCtx, out: &mut
                 ui.label(RichText::new(trunc_line(&s.description)).font(ui_font(12.0)).color(theme.text_dim));
             }
         }
+    }
+    if matches!(view.items[i], Item::User { .. } | Item::Assistant { .. }) {
+        let r = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(ui.max_rect().right(), ui.cursor().top().max(top + 1.0)));
+        ui.ctx().data_mut(|d| d.insert_temp(hover_id, r));
     }
     if let Some((cmds, ok)) = approval.filter(|(c, _)| !c.is_empty()) {
         view.approval_log.push((cmds, ok));

@@ -1,6 +1,7 @@
 //! Native Copilot agent bays: SDK-driven view model.
 
 pub mod backend;
+pub mod files;
 pub mod forms;
 pub mod markdown;
 pub mod view;
@@ -291,6 +292,17 @@ pub struct AgentView {
     pub learn_due: Option<Instant>,
     /// Command approvals (true) and denials (false) for approval-rule learning.
     pub approval_log: Vec<(Vec<String>, bool)>,
+    /// A new session whose folder and Copilot session are created with the first message
+    /// (so the folder can be named after it, and unused sessions leave nothing behind).
+    pub deferred: bool,
+    /// Name the user gave this session.
+    pub name: Option<String>,
+    /// Text in the header's rename box while it's open.
+    pub rename_draft: Option<String>,
+    /// Jump the transcript to the latest message on the next frame.
+    pub scroll_to_end: bool,
+    /// The Files tab's tree state.
+    pub files_state: files::FilesState,
 }
 
 /// An MCP App view docked in an agent bay.
@@ -325,6 +337,11 @@ pub fn tool_target(name: &str, args: &Value) -> Option<String> {
         "open_canvas" => args.get("input").and_then(|i| s(i, "title")).or_else(|| s(args, "instanceId")),
         "invoke_canvas_action" => s(args, "actionName"),
         "list_canvas_capabilities" => s(args, "canvasId"),
+        "graysense_settings" => match args.get("changes").and_then(|c| c.as_object()) {
+            Some(c) => Some(trunc(&c.keys().map(String::as_str).collect::<Vec<_>>().join(", "), 60)),
+            None => s(args, "action"),
+        },
+        "graysense_mcp_servers" | "graysense_plugins" => Some(trunc(&[s(args, "action"), s(args, "name").or_else(|| s(args, "source"))].into_iter().flatten().collect::<Vec<_>>().join(" "), 60)),
         _ => args
             .as_object()
             .and_then(|o| o.values().find_map(|v| v.as_str().map(|x| trunc(x, 48)))),
@@ -368,6 +385,10 @@ pub fn tool_verb(name: &str) -> String {
         "store_memory" => "Remember".into(),
         "graysense_add_mission" => "Add mission".into(),
         "graysense_notify" => "Notify".into(),
+        "graysense_settings" => "Change settings".into(),
+        "graysense_mcp_servers" => "Manage MCP servers".into(),
+        "graysense_plugins" => "Manage plugins".into(),
+        "graysense_recall" => "Recall".into(),
         "open_canvas" => "Open canvas".into(),
         "invoke_canvas_action" => "Canvas action".into(),
         "list_canvas_capabilities" => "Inspect canvas".into(),
@@ -446,15 +467,23 @@ impl AgentView {
             learn_cursor: 0,
             learn_due: None,
             approval_log: Vec::new(),
+            deferred: false,
+            name: None,
+            rename_draft: None,
+            scroll_to_end: false,
+            files_state: Default::default(),
         }
     }
 
     pub fn display_title(&self) -> String {
-        self.title
-            .as_deref()
-            .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
-            .map(str::to_owned)
-            .unwrap_or_else(|| crate::settings::dir_name(&self.cwd))
+        if let Some(n) = self.name.as_deref().filter(|n| !n.trim().is_empty()) {
+            return n.trim().to_owned();
+        }
+        match self.title.as_deref().filter(|t| !t.trim().is_empty()) {
+            Some(t) => crate::sessions::short_title(t),
+            None if self.deferred || self.session_id.is_none() && self.items.is_empty() => "New session".to_owned(),
+            None => crate::settings::dir_name(&self.cwd),
+        }
     }
 
     pub fn push(&mut self, item: Item) -> usize {

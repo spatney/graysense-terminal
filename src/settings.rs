@@ -1,16 +1,24 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 
 use crate::theme::ThemeId;
 
-/// `%APPDATA%\Graysense` (created on first use).
+/// `%APPDATA%\Graysense` (created on first use). `GRAYSENSE_CONFIG_DIR` points Graysense at
+/// another profile (e.g. for tests), leaving the user's own untouched.
 pub fn config_dir() -> PathBuf {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Graysense");
+    let dir = std::env::var_os("GRAYSENSE_CONFIG_DIR")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("Graysense"));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// `~\Graysense\Sessions`: where new sessions get their own folders unless the user picks another.
+pub fn default_sessions_root() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join("Graysense").join("Sessions")
 }
 
 /// Left rail destinations.
@@ -59,6 +67,10 @@ pub struct Settings {
     pub smooth_cursor: bool,
     pub perf_hud: bool,
     pub memory: MemorySettings,
+    /// Folder that holds each session's own folder (`None` = `~\Graysense\Sessions`).
+    pub sessions_root: Option<String>,
+    /// New sessions get their own folder under the sessions folder (otherwise the last folder used).
+    pub session_folders: bool,
 }
 
 /// Memory controls. `enabled = false` stops both learning and using memories.
@@ -108,6 +120,8 @@ impl Default for Settings {
             smooth_cursor: true,
             perf_hud: false,
             memory: MemorySettings::default(),
+            sessions_root: None,
+            session_folders: true,
         }
     }
 }
@@ -140,6 +154,145 @@ impl Settings {
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."))
     }
+
+    pub fn sessions_root(&self) -> PathBuf {
+        self.sessions_root.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from).unwrap_or_else(default_sessions_root)
+    }
+
+    /// Every setting an agent can change, with its current value and what it accepts
+    /// (the `graysense_settings` tool's `get`).
+    pub fn describe(&self, models: &[String]) -> Value {
+        let mut out = Map::new();
+        let mut add = |key: &str, value: Value, accepts: Value, about: &str| {
+            out.insert(key.to_owned(), json!({ "value": value, "accepts": accepts, "description": about, "asks_user": !SAFE_KEYS.contains(&key) }));
+        };
+        let model_choice = json!({ "one_of": models, "or": "null for the default" });
+        add("theme", json!(theme_key(self.theme)), json!(["graphite", "carbon", "slate", "paper"]), "Color theme. Paper is light; the others are dark.");
+        add("terminal_font_size", json!(self.term_font_size), json!("number from 9 to 28"), "Font size of terminal bays, in points.");
+        add("layout", json!(layout_key(self.layout)), json!(["grid", "focus", "columns", "rows"]), "How bays are tiled.");
+        add("side_panel", json!(self.side_panel.map(panel_key).unwrap_or("hidden")), json!(PANELS), "Which side panel is open.");
+        add("side_panel_width", json!(self.side_width), json!("number from 260 to 620"), "Side panel width, in points.");
+        add("show_reasoning", json!(self.show_reasoning), json!("boolean"), "Show agents' reasoning in transcripts.");
+        add("smooth_cursor", json!(self.smooth_cursor), json!("boolean"), "Animate the terminal cursor.");
+        add("performance_hud", json!(self.perf_hud), json!("boolean"), "Show frame time and memory use in the status bar.");
+        add("default_model", json!(self.default_model), model_choice.clone(), "Model new agents start with.");
+        add("shell", json!(self.shell), json!("program or command line, or null for PowerShell"), "Shell that new terminal bays run.");
+        add("sessions_folder", json!(self.sessions_root().display().to_string()), json!("absolute folder path, or null for ~\\Graysense\\Sessions"), "Where new sessions get their own folders.");
+        add("session_folders", json!(self.session_folders), json!("boolean"), "Give every new session its own folder inside sessions_folder.");
+        add("memory.enabled", json!(self.memory.enabled), json!("boolean"), "Master switch for Graysense memory.");
+        add("memory.learn", json!(self.memory.learn), json!("boolean"), "Learn from conversations in the background.");
+        add("memory.share", json!(self.memory.inject), json!("boolean"), "Share relevant memories with agents.");
+        add("memory.review_all", json!(self.memory.review_all), json!("boolean"), "Ask the user before saving anything learned.");
+        add("memory.learning_model", json!(self.memory.model), model_choice, "Model the memory curator uses (null = lowest cost).");
+        Value::Object(out)
+    }
+
+    /// Apply `{key: value}` changes from an agent, all or nothing. Returns what changed.
+    pub fn apply_patch(&mut self, changes: &Map<String, Value>, models: &[String]) -> Result<Vec<String>, String> {
+        let mut next = self.clone();
+        let mut done = Vec::new();
+        for (key, v) in changes {
+            let bad = || format!("Invalid value for {key}: {v}. Call graysense_settings with action \"get\" to see what it accepts.");
+            let text = || v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).ok_or_else(bad);
+            let flag = || v.as_bool().ok_or_else(bad);
+            let number = |lo: f64, hi: f64| v.as_f64().filter(|n| (lo..=hi).contains(n)).map(|n| n as f32).ok_or_else(bad);
+            let model = || -> Result<Option<String>, String> {
+                if v.is_null() {
+                    return Ok(None);
+                }
+                let m = text()?;
+                if !models.is_empty() && !models.contains(&m) {
+                    return Err(format!("Unknown model {m}. Available: {}", models.join(", ")));
+                }
+                Ok(Some(m))
+            };
+            match key.as_str() {
+                "theme" => next.theme = v.as_str().and_then(parse_theme).ok_or_else(bad)?,
+                "terminal_font_size" => next.term_font_size = number(9.0, 28.0)?,
+                "layout" => next.layout = v.as_str().and_then(parse_layout).ok_or_else(bad)?,
+                "side_panel" => next.side_panel = if v.is_null() { None } else { parse_panel(&text()?).ok_or_else(bad)? },
+                "side_panel_width" => next.side_width = number(260.0, 620.0)?,
+                "show_reasoning" => next.show_reasoning = flag()?,
+                "smooth_cursor" => next.smooth_cursor = flag()?,
+                "performance_hud" => next.perf_hud = flag()?,
+                "default_model" => next.default_model = model()?,
+                "shell" => next.shell = if v.is_null() { None } else { Some(text()?) },
+                "sessions_folder" => {
+                    next.sessions_root = if v.is_null() {
+                        None
+                    } else {
+                        let p = text()?;
+                        if !Path::new(&p).is_absolute() || Path::new(&p).is_file() {
+                            return Err("sessions_folder must be an absolute path to a folder".into());
+                        }
+                        Some(p)
+                    }
+                }
+                "session_folders" => next.session_folders = flag()?,
+                "memory.enabled" => next.memory.enabled = flag()?,
+                "memory.learn" => next.memory.learn = flag()?,
+                "memory.share" => next.memory.inject = flag()?,
+                "memory.review_all" => next.memory.review_all = flag()?,
+                "memory.learning_model" => next.memory.model = model()?,
+                other => return Err(format!("Unknown setting “{other}”. Call graysense_settings with action \"get\" to list them.")),
+            }
+            done.push(format!("{key} → {}", if v.is_null() { "default".to_owned() } else { v.to_string().trim_matches('"').to_owned() }));
+        }
+        *self = next;
+        Ok(done)
+    }
+}
+
+/// Settings an agent may change without asking: appearance and layout only.
+pub const SAFE_KEYS: &[&str] = &["theme", "terminal_font_size", "layout", "side_panel", "side_panel_width", "show_reasoning", "smooth_cursor", "performance_hud"];
+
+const PANELS: [&str; 7] = ["missions", "sessions", "memory", "mcp", "plugins", "settings", "hidden"];
+
+fn theme_key(t: ThemeId) -> &'static str {
+    match t {
+        ThemeId::Graphite => "graphite",
+        ThemeId::Carbon => "carbon",
+        ThemeId::Slate => "slate",
+        ThemeId::Paper => "paper",
+    }
+}
+
+fn parse_theme(s: &str) -> Option<ThemeId> {
+    let s = s.trim().to_ascii_lowercase();
+    ThemeId::ALL.into_iter().find(|t| theme_key(*t) == s || (s == "light" && *t == ThemeId::Paper) || (s == "dark" && *t == ThemeId::Graphite))
+}
+
+fn layout_key(l: LayoutMode) -> &'static str {
+    match l {
+        LayoutMode::Auto => "grid",
+        LayoutMode::Focus => "focus",
+        LayoutMode::Columns => "columns",
+        LayoutMode::Rows => "rows",
+    }
+}
+
+fn parse_layout(s: &str) -> Option<LayoutMode> {
+    [LayoutMode::Auto, LayoutMode::Focus, LayoutMode::Columns, LayoutMode::Rows].into_iter().find(|l| layout_key(*l).eq_ignore_ascii_case(s.trim()))
+}
+
+fn panel_key(p: SidePanel) -> &'static str {
+    match p {
+        SidePanel::Missions => "missions",
+        SidePanel::Sessions => "sessions",
+        SidePanel::Memory => "memory",
+        SidePanel::Mcp => "mcp",
+        SidePanel::Plugins => "plugins",
+        SidePanel::Settings => "settings",
+    }
+}
+
+/// `Some(None)` = hide the panel.
+fn parse_panel(s: &str) -> Option<Option<SidePanel>> {
+    let s = s.to_ascii_lowercase();
+    if s == "hidden" || s == "none" {
+        return Some(None);
+    }
+    [SidePanel::Missions, SidePanel::Sessions, SidePanel::Memory, SidePanel::Mcp, SidePanel::Plugins, SidePanel::Settings].into_iter().find(|p| panel_key(*p) == s).map(Some)
 }
 
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {

@@ -59,6 +59,8 @@ pub struct AgentSpec {
     pub model: Option<String>,
     pub mode: Mode,
     pub prompt: Option<String>,
+    /// Files attached to `prompt`.
+    pub files: Vec<PathBuf>,
     pub auto_approve: Arc<AtomicBool>,
     pub resume: Option<String>,
     /// Files/folders the user attached; reading them never needs another approval.
@@ -84,13 +86,17 @@ pub enum Cmd {
     Close { bay: BayId },
     ListModels,
     ListSessions,
+    /// Name an open session: `user` names stick; otherwise only applied until the user names it.
+    NameSession { bay: BayId, name: String, user: bool },
+    /// Delete a session's history (its folder is left alone).
+    DeleteSession { id: String },
     /// Run the memory curator over a conversation excerpt (already formatted).
     Learn { bay: BayId, model: Option<String>, message: String },
     Mcp(McpCmd),
     Plugin(PluginCmd),
     App(AppCmd),
     Shutdown(oneshot::Sender<()>),
-    Registered { bay: BayId, session: Arc<Session>, prompt: Option<String>, mode: Mode, resumed: bool },
+    Registered { bay: BayId, session: Arc<Session>, prompt: Option<String>, files: Vec<PathBuf>, mode: Mode, resumed: bool },
     StartFailed { bay: BayId, error: String },
 }
 
@@ -211,6 +217,8 @@ pub enum Evt {
     MarketPlugins { market: String, plugins: Result<Vec<MarketPlugin>, String> },
     AppReply { view: u64, req_id: Value, result: Result<Value, String> },
     AddMission { bay: BayId, title: String, notes: String },
+    /// An agent reads (`changes: None`) or changes Graysense settings; the app replies.
+    Config { changes: Option<serde_json::Map<String, Value>>, reply: oneshot::Sender<Result<Value, String>> },
     Notify { bay: BayId, title: String, message: String, level: String },
     /// An agent saved a memory through the runtime's `store_memory` tool.
     Remembered { bay: BayId, id: crate::memory::MemoryId, text: String },
@@ -271,7 +279,7 @@ fn needs_client(cmd: &Cmd) -> bool {
 
 fn bay_of(cmd: &Cmd) -> Option<BayId> {
     match cmd {
-        Cmd::Send { bay, .. } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::Close { bay } => Some(*bay),
+        Cmd::Send { bay, .. } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
         Cmd::App(AppCmd::CallTool { bay, .. }) | Cmd::App(AppCmd::ReadResource { bay, .. }) => Some(*bay),
         Cmd::Mcp(McpCmd::Tools { bay, .. }) | Cmd::Mcp(McpCmd::Restart { bay, .. }) | Cmd::Mcp(McpCmd::Stop { bay, .. }) | Cmd::Mcp(McpCmd::Start { bay, .. }) => Some(*bay),
         _ => None,
@@ -334,11 +342,12 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                 let self_tx = self_tx.clone();
                 tokio::spawn(async move {
                     let prompt = spec.prompt.clone();
+                    let files = spec.files.clone();
                     let mode = spec.mode;
                     let resumed = spec.resume.is_some();
-                    match start_session(&c, bay, spec, ui.clone()).await {
+                    match start_session(&c, bay, spec, ui.clone(), self_tx.clone()).await {
                         Ok(session) => {
-                            let _ = self_tx.send(Cmd::Registered { bay, session: Arc::new(session), prompt, mode, resumed });
+                            let _ = self_tx.send(Cmd::Registered { bay, session: Arc::new(session), prompt, files, mode, resumed });
                         }
                         Err(error) => {
                             let _ = self_tx.send(Cmd::StartFailed { bay, error });
@@ -351,7 +360,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                 parked.remove(&bay);
                 ui.send(Evt::SessionFailed { bay, error });
             }
-            Cmd::Registered { bay, session, prompt, mode, resumed } => {
+            Cmd::Registered { bay, session, prompt, files, mode, resumed } => {
                 starting.remove(&bay);
                 ui.send(Evt::SessionReady { bay, session_id: session.id().to_string() });
                 if resumed {
@@ -370,7 +379,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     });
                 }
                 if let Some(p) = prompt {
-                    backlog.push_back(Cmd::Send { bay, text: p, files: Vec::new() });
+                    backlog.push_back(Cmd::Send { bay, text: p, files });
                 }
                 sessions.insert(bay, session);
                 if let Some(cmds) = parked.remove(&bay) {
@@ -432,6 +441,30 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                         let _ = s.disconnect().await;
                     });
                 }
+            }
+            Cmd::NameSession { bay, name, user } => {
+                let s = sessions[&bay].clone();
+                tokio::spawn(async move {
+                    let r = if user {
+                        s.rpc().name().set(github_copilot_sdk::rpc::NameSetRequest { name }).await
+                    } else {
+                        s.rpc().name().set_auto(github_copilot_sdk::rpc::NameSetAutoRequest { summary: name }).await.map(|_| ())
+                    };
+                    if let Err(e) = r {
+                        tracing::debug!("session name not stored by the runtime: {e}");
+                    }
+                });
+            }
+            Cmd::DeleteSession { id } => {
+                let c = client.clone().unwrap();
+                let ui = ui.clone();
+                let self_tx = self_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = c.delete_session(&SessionId::from(id)).await {
+                        ui.send(Evt::Toast { error: true, text: format!("Couldn't delete the session: {e}") });
+                    }
+                    let _ = self_tx.send(Cmd::ListSessions);
+                });
             }
             Cmd::ListModels => {
                 let c = client.clone().unwrap();
@@ -502,7 +535,7 @@ fn canvas_identity() -> github_copilot_sdk::CanvasProviderIdentity {
     id
 }
 
-async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx) -> Result<Session, String> {
+async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, self_tx: mpsc::UnboundedSender<Cmd>) -> Result<Session, String> {
     let bridge = Arc::new(Bridge {
         bay,
         ui: ui.clone(),
@@ -521,7 +554,7 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx) -
         .memory
         .clone()
         .map(|m| Arc::new(MemoryHooks { bay, ui: ui.clone(), memory: m, shown: Default::default(), started: AtomicBool::new(false) }) as Arc<dyn github_copilot_sdk::hooks::SessionHooks>);
-    let tools = graysense_tools(bay, ui.clone(), spec.memory.clone());
+    let tools = graysense_tools(bay, ui.clone(), spec.memory.clone(), client.clone(), self_tx);
     let prepared = if let Some(id) = spec.resume.clone() {
         let mut config = ResumeSessionConfig::new(SessionId::from(id))
             .with_client_name("graysense")
@@ -998,7 +1031,7 @@ impl PermissionHandler for Bridge {
         }
         if data.managed_approval_required != Some(true)
             && !touches_graysense_state(&raw)
-            && (self.auto.load(Ordering::Relaxed) || self.is_own_canvas_call(&raw) || self.covers_attachments(&raw) || self.covered_by_memory(&raw))
+            && (self.auto.load(Ordering::Relaxed) || self.is_own_canvas_call(&raw) || self.covers_attachments(&raw) || self.covered_by_memory(&raw) || is_safe_config_call(&raw))
         {
             return PermissionResult::approve_once();
         }
@@ -1126,7 +1159,7 @@ impl ToolHandler for NotifyTool {
     }
 }
 
-fn graysense_tools(bay: BayId, ui: UiTx, memory: Option<AgentMemory>) -> Vec<Tool> {
+fn graysense_tools(bay: BayId, ui: UiTx, memory: Option<AgentMemory>, client: Client, self_tx: mpsc::UnboundedSender<Cmd>) -> Vec<Tool> {
     let mut tools = vec![
         Tool::new("graysense_add_mission")
             .with_description(
@@ -1155,7 +1188,56 @@ fn graysense_tools(bay: BayId, ui: UiTx, memory: Option<AgentMemory>) -> Vec<Too
                 "required": ["title", "message"]
             }))
             .with_skip_permission(true)
-            .with_handler(Arc::new(NotifyTool { bay, ui })),
+            .with_handler(Arc::new(NotifyTool { bay, ui: ui.clone() })),
+        // Everything configurable in Graysense is also configurable by agents. These tools go
+        // through the normal approval flow; appearance changes and reads are approved automatically.
+        Tool::new("graysense_settings")
+            .with_description(
+                "Read or change the settings of Graysense, the app you are running in: theme, terminal font size, layout, side panel, \
+                 default model, terminal shell, the folder new sessions are created in, memory switches and more. \
+                 Call with action \"get\" first to see every setting, its current value and what it accepts, then action \"set\" with \
+                 `changes`, e.g. {\"theme\": \"paper\", \"terminal_font_size\": 15}. Appearance changes apply at once; others ask the user.",
+            )
+            .with_parameters(json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["get", "set"] },
+                    "changes": { "type": "object", "description": "For \"set\": setting keys (from \"get\") and their new values; null restores a default." }
+                },
+                "required": ["action"]
+            }))
+            .with_handler(Arc::new(SettingsTool { ui: ui.clone() })),
+        Tool::new("graysense_mcp_servers")
+            .with_description(
+                "List, add, update, remove, enable or disable the MCP servers configured for Copilot (shared with the Copilot CLI). \
+                 For add/update, `config` is the server's JSON, e.g. {\"type\": \"local\", \"command\": \"npx\", \"args\": [\"-y\", \"some-mcp-server\"], \"tools\": [\"*\"]} \
+                 or {\"type\": \"http\", \"url\": \"https://example.com/mcp\", \"headers\": {}, \"tools\": [\"*\"]}. New agents load the change.",
+            )
+            .with_parameters(json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "update", "remove", "enable", "disable"] },
+                    "name": { "type": "string", "description": "Server name (all actions except list)" },
+                    "config": { "type": "object", "description": "Server config (add, update)" }
+                },
+                "required": ["action"]
+            }))
+            .with_handler(Arc::new(McpTool { client: client.clone(), ui: ui.clone(), self_tx: self_tx.clone() })),
+        Tool::new("graysense_plugins")
+            .with_description(
+                "List, install, uninstall, enable, disable or update Copilot plugins. \"install\" takes `source` (e.g. plugin@marketplace, \
+                 a GitHub owner/repo or a URL); the other actions take the plugin's `name`.",
+            )
+            .with_parameters(json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "install", "uninstall", "enable", "disable", "update"] },
+                    "name": { "type": "string" },
+                    "source": { "type": "string" }
+                },
+                "required": ["action"]
+            }))
+            .with_handler(Arc::new(PluginsTool { client, ui, self_tx })),
     ];
     if let Some(memory) = memory {
         tools.push(
@@ -1174,6 +1256,169 @@ fn graysense_tools(bay: BayId, ui: UiTx, memory: Option<AgentMemory>) -> Vec<Too
         );
     }
     tools
+}
+
+// ------------------------------------------------------------------ agent-configurable settings
+
+/// Reads and patches Graysense settings on the UI thread, which owns them.
+struct SettingsTool {
+    ui: UiTx,
+}
+
+#[async_trait]
+impl ToolHandler for SettingsTool {
+    async fn call(&self, inv: ToolInvocation) -> Result<ToolResult, github_copilot_sdk::Error> {
+        let changes = match inv.arguments.get("action").and_then(Value::as_str).unwrap_or("get") {
+            "get" => None,
+            "set" => match inv.arguments.get("changes").and_then(Value::as_object) {
+                Some(c) if !c.is_empty() => Some(c.clone()),
+                _ => return Ok(ToolResult::Text("Pass `changes`: an object of setting keys and their new values.".into())),
+            },
+            other => return Ok(ToolResult::Text(format!("Unknown action “{other}”: use get or set."))),
+        };
+        let (tx, rx) = oneshot::channel();
+        self.ui.send(Evt::Config { changes, reply: tx });
+        let text = match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(Ok(v))) => serde_json::to_string_pretty(&v).unwrap_or_default(),
+            Ok(Ok(Err(e))) => e,
+            _ => "Graysense didn't respond.".into(),
+        };
+        Ok(ToolResult::Text(text))
+    }
+}
+
+/// Reads and safe appearance changes need no approval; everything else asks the user.
+fn is_safe_config_call(raw: &Value) -> bool {
+    let Some(pr) = raw.get("promptRequest").or_else(|| raw.get("permissionRequest")) else { return false };
+    if pr.get("kind").and_then(Value::as_str) != Some("custom-tool") {
+        return false;
+    }
+    let args = pr.get("args").cloned().unwrap_or(Value::Null);
+    let action = args.get("action").and_then(Value::as_str).unwrap_or("");
+    match pr.get("toolName").and_then(Value::as_str) {
+        Some("graysense_settings") => {
+            action == "get" || action == "set" && args.get("changes").and_then(Value::as_object).is_some_and(|c| c.keys().all(|k| crate::settings::SAFE_KEYS.contains(&k.as_str())))
+        }
+        Some("graysense_mcp_servers" | "graysense_plugins") => action == "list",
+        _ => false,
+    }
+}
+
+fn arg(inv: &ToolInvocation, key: &str) -> Option<String> {
+    inv.arguments.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+struct McpTool {
+    client: Client,
+    ui: UiTx,
+    self_tx: mpsc::UnboundedSender<Cmd>,
+}
+
+#[async_trait]
+impl ToolHandler for McpTool {
+    async fn call(&self, inv: ToolInvocation) -> Result<ToolResult, github_copilot_sdk::Error> {
+        let action = arg(&inv, "action").unwrap_or_else(|| "list".into());
+        let c = &self.client;
+        let result: Result<String, String> = async {
+            if action == "list" {
+                let configured = c.rpc().mcp().config().list().await.map_err(|e| e.to_string())?.servers;
+                let found = c.rpc().mcp().discover(McpDiscoverRequest::default()).await.map(|d| d.servers).unwrap_or_default();
+                let servers: Vec<Value> = found
+                    .into_iter()
+                    .map(|d| json!({ "name": d.name, "enabled": d.enabled, "source": status_str(&d.source), "config": configured.get(&d.name) }))
+                    .collect();
+                return Ok(serde_json::to_string_pretty(&json!({ "servers": servers })).unwrap_or_default());
+            }
+            let name = arg(&inv, "name").ok_or("Pass `name`.")?;
+            match action.as_str() {
+                "add" | "update" => {
+                    let config = inv.arguments.get("config").cloned().filter(Value::is_object).ok_or("Pass `config`, the server's JSON config.")?;
+                    let r = if action == "add" {
+                        c.rpc().mcp().config().add(McpConfigAddRequest { name: name.clone(), config }).await
+                    } else {
+                        c.rpc().mcp().config().update(McpConfigUpdateRequest { name: name.clone(), config }).await
+                    };
+                    r.map_err(|e| e.to_string())?;
+                    let _ = c.rpc().mcp().config().reload().await;
+                    Ok(format!("{} MCP server “{name}”. New agents will load it.", if action == "add" { "Added" } else { "Updated" }))
+                }
+                "remove" => {
+                    c.rpc().mcp().config().remove(McpConfigRemoveRequest { name: name.clone(), ..Default::default() }).await.map_err(|e| e.to_string())?;
+                    let _ = c.rpc().mcp().config().reload().await;
+                    Ok(format!("Removed MCP server “{name}”."))
+                }
+                "enable" => c.rpc().mcp().config().enable(McpConfigEnableRequest { names: vec![name.clone()] }).await.map(|_| format!("Enabled “{name}”.")).map_err(|e| e.to_string()),
+                "disable" => c.rpc().mcp().config().disable(McpConfigDisableRequest { names: vec![name.clone()] }).await.map(|_| format!("Disabled “{name}”.")).map_err(|e| e.to_string()),
+                other => Err(format!("Unknown action “{other}”.")),
+            }
+        }
+        .await;
+        finish_config_call(&self.ui, &action, result, || {
+            let _ = self.self_tx.send(Cmd::Mcp(McpCmd::Refresh { bay: None, cwd: None }));
+        })
+    }
+}
+
+struct PluginsTool {
+    client: Client,
+    ui: UiTx,
+    self_tx: mpsc::UnboundedSender<Cmd>,
+}
+
+#[async_trait]
+impl ToolHandler for PluginsTool {
+    async fn call(&self, inv: ToolInvocation) -> Result<ToolResult, github_copilot_sdk::Error> {
+        let action = arg(&inv, "action").unwrap_or_else(|| "list".into());
+        let p = self.client.rpc().plugins();
+        let result: Result<String, String> = async {
+            match action.as_str() {
+                "list" => {
+                    let plugins: Vec<Value> = p
+                        .list()
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .plugins
+                        .into_iter()
+                        .map(|i| json!({ "name": i.name, "marketplace": i.marketplace, "version": i.version, "enabled": i.enabled, "description": i.description }))
+                        .collect();
+                    Ok(serde_json::to_string_pretty(&json!({ "plugins": plugins })).unwrap_or_default())
+                }
+                "install" => {
+                    let source = arg(&inv, "source").or_else(|| arg(&inv, "name")).ok_or("Pass `source`.")?;
+                    let r = p.install(PluginsInstallRequest { source, ..Default::default() }).await.map_err(|e| e.to_string())?;
+                    Ok(format!("Installed {}{}", r.plugin.name, r.post_install_message.map(|m| format!(" — {m}")).unwrap_or_default()))
+                }
+                _ => {
+                    let name = arg(&inv, "name").ok_or("Pass `name`.")?;
+                    let names = vec![name.clone()];
+                    match action.as_str() {
+                        "uninstall" => p.uninstall(PluginsUninstallRequest { name: name.clone(), ..Default::default() }).await.map(|_| format!("Uninstalled {name}.")),
+                        "enable" => p.enable(PluginsEnableRequest { names, ..Default::default() }).await.map(|_| format!("Enabled {name}.")),
+                        "disable" => p.disable(PluginsDisableRequest { names, ..Default::default() }).await.map(|_| format!("Disabled {name}.")),
+                        "update" => p.update(PluginsUpdateRequest { name: name.clone() }).await.map(|r| format!("Updated {name} to {}.", r.new_version.unwrap_or_else(|| "the latest version".into()))),
+                        other => return Err(format!("Unknown action “{other}”.")),
+                    }
+                    .map_err(|e| e.to_string())
+                }
+            }
+        }
+        .await;
+        finish_config_call(&self.ui, &action, result, || {
+            let _ = self.self_tx.send(Cmd::Plugin(PluginCmd::Refresh));
+        })
+    }
+}
+
+/// Report a configuration change to the user (toast) and the agent, and refresh the UI.
+fn finish_config_call(ui: &UiTx, action: &str, result: Result<String, String>, refresh: impl FnOnce()) -> Result<ToolResult, github_copilot_sdk::Error> {
+    if action != "list" {
+        refresh();
+        match &result {
+            Ok(text) => ui.send(Evt::Toast { error: false, text: format!("Copilot: {text}") }),
+            Err(e) => ui.send(Evt::Toast { error: true, text: e.clone() }),
+        }
+    }
+    Ok(ToolResult::Text(result.unwrap_or_else(|e| format!("Failed: {e}"))))
 }
 
 // ------------------------------------------------------------------ memory

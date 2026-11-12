@@ -266,8 +266,10 @@ impl MissionBoard {
     fn card(&mut self, ui: &mut Ui, i: usize, theme: &Theme, agent_status: &dyn Fn(BayId) -> Option<(String, egui::Color32)>) -> Option<CardAction> {
         let m = self.missions[i].clone();
         let mut action = None;
-        let id = Id::unique(("mission", m.id));
-        let inner = ui.dnd_drag_source(id, MissionDrag(m.id), |ui| {
+        // The card is its own drag handle. Its sense sits *below* the card's buttons (unlike
+        // `dnd_drag_source`, which covers them), so the buttons stay clickable and a drag only
+        // starts once the pointer moves.
+        let inner = ui.scope_builder(egui::UiBuilder::new().id_salt(("mission-card", m.id)).sense(Sense::click_and_drag()), |ui| {
             Frame::new().fill(theme.surface2).stroke(Stroke::new(1.0, theme.border)).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_top(|ui| {
@@ -323,7 +325,24 @@ impl MissionBoard {
                 });
             });
         });
-        let _ = inner.response.on_hover_cursor(CursorIcon::Grab);
+        let resp = inner.response;
+        resp.dnd_set_drag_payload(MissionDrag(m.id));
+        if resp.dragged() {
+            // A small ghost of the mission follows the pointer to the agent it's dropped on.
+            if let Some(p) = ui.ctx().pointer_interact_pos() {
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::unique(("mission-ghost", m.id))));
+                let g = kit::elided(&painter, &m.title, semibold(12.5), theme.text, 260.0);
+                let r = egui::Rect::from_min_size(p + egui::vec2(14.0, 10.0), g.size() + egui::vec2(22.0, 14.0));
+                painter.rect(r, CornerRadius::same(8), theme.surface3, Stroke::new(1.0, theme.accent), egui::StrokeKind::Inside);
+                painter.galley(r.min + egui::vec2(11.0, 7.0), g, theme.text);
+            }
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        } else if resp.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        }
+        if resp.double_clicked() {
+            action = Some(CardAction::Edit);
+        }
         action
     }
 

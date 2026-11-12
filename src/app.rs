@@ -26,6 +26,7 @@ use crate::mcp_apps::{AppHost, AppRequest};
 use crate::memory::{MemoryId, MemoryStore, Origin, Project, Scope, Source, State as MemoryState};
 use crate::missions::{BoardAction, MissionBoard, MissionDrag};
 use crate::palette::{Command, Mode as PaletteMode, Palette};
+use crate::sessions::{self, SessionIndex};
 use crate::settings::{self, Settings, SidePanel};
 use crate::sysmon::{self, SysStats};
 use crate::term::view::TermAction;
@@ -64,6 +65,7 @@ enum Pick {
     Attach(BayId),
     ExportMemory { markdown: bool },
     ImportMemory,
+    SessionsRoot,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -80,6 +82,9 @@ enum SavedBay {
         session_id: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         incognito: bool,
+        /// A new session that hasn't started (it gets its folder with the first message).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fresh: bool,
     },
     Shell { cwd: String },
 }
@@ -136,6 +141,20 @@ pub struct GraysenseApp {
     memory_panel: MemoryPanel,
     /// Curator runs in flight, by bay (the bay may close before the answer arrives).
     learn_jobs: std::collections::HashMap<BayId, LearnJob>,
+    /// Names, pins and folders of the sessions Graysense knows.
+    session_index: SessionIndex,
+    /// Apply `settings.side_width` to the side panel on the next frame (an agent changed it).
+    force_side_width: bool,
+    sessions_panel_ui: crate::control::sessions::SessionsPanel,
+    show_activity: bool,
+    show_shortcuts: bool,
+    search_ui: crate::search_ui::SearchUi,
+    /// Latest search index (sessions + session files), rebuilt in the background.
+    search_index: Arc<crate::search::Index>,
+    search_gen: u64,
+    search_rx: Option<Receiver<crate::search::Index>>,
+    search_built: Option<Instant>,
+    egui_ctx: egui::Context,
 }
 
 /// What a curator run was reading, so its answer can be filed correctly.
@@ -243,6 +262,17 @@ impl GraysenseApp {
             memory: Arc::new(Mutex::new(MemoryStore::load())),
             memory_panel: MemoryPanel::default(),
             learn_jobs: Default::default(),
+            session_index: SessionIndex::load(),
+            force_side_width: false,
+            sessions_panel_ui: Default::default(),
+            show_activity: false,
+            show_shortcuts: false,
+            search_ui: Default::default(),
+            search_index: Arc::new(crate::search::Index::empty()),
+            search_gen: 0,
+            search_rx: None,
+            search_built: None,
+            egui_ctx: ctx.clone(),
         };
         crate::memory::set_switches(app.settings.memory.enabled, app.settings.memory.inject);
         if startup.restore {
@@ -269,9 +299,11 @@ impl GraysenseApp {
         let Some(ws) = settings::read_json::<Workspace>(&Self::workspace_path()) else { return };
         for b in ws.bays {
             match b {
-                SavedBay::Agent { cwd, session_id, incognito } => {
+                SavedBay::Agent { cwd, session_id, incognito, fresh } => {
                     let cwd = PathBuf::from(cwd);
-                    if cwd.is_dir() {
+                    if fresh {
+                        self.new_session(None, incognito);
+                    } else if cwd.is_dir() {
                         self.new_agent_ex(cwd, None, session_id, None, incognito);
                     }
                 }
@@ -296,6 +328,7 @@ impl GraysenseApp {
                     cwd: v.cwd.display().to_string(),
                     session_id: v.session_id.clone().filter(|_| v.items.iter().any(|i| matches!(i, Item::User { .. }))),
                     incognito: v.incognito,
+                    fresh: v.deferred,
                 },
                 BayKind::Shell(p) => SavedBay::Shell { cwd: p.cwd.display().to_string() },
             })
@@ -350,40 +383,121 @@ impl GraysenseApp {
     fn new_agent_ex(&mut self, cwd: PathBuf, prompt: Option<String>, resume: Option<String>, mission: Option<u64>, incognito: bool) -> BayId {
         let id = self.alloc_bay();
         let mut view = AgentView::new(id, cwd.clone(), Mode::Interactive);
+        view.project = self.project_for(&cwd);
         view.mission = mission;
         view.session_id = resume.clone();
         view.incognito = incognito;
+        if let Some(meta) = resume.as_deref().and_then(|r| self.session_index.get(r)) {
+            view.name = meta.name.clone();
+        }
         if resume.is_some() {
             view.notice(Level::Info, "Resuming session…");
             // Resumed history was already read when it happened.
             view.learn_cursor = usize::MAX;
         }
         if let Some(p) = &prompt {
+            view.title = Some(p.clone());
             view.echo_user(p);
             self.capture_explicit_memory(&mut view, p);
         }
-        let spec = self.agent_spec(&view, prompt, resume);
+        let first = prompt.as_deref().map(sessions::short_title);
+        let spec = self.agent_spec(&view, prompt, Vec::new(), resume);
         self.backend.send(Cmd::Create { bay: id, spec });
+        if let Some(name) = first {
+            self.backend.send(Cmd::NameSession { bay: id, name, user: false });
+        }
         self.bays.push(Bay { id, kind: BayKind::Agent(Box::new(view)) });
         self.focus(self.bays.len() - 1);
-        self.settings.push_recent_dir(&cwd);
-        self.settings_dirty = true;
+        if !sessions::is_under(&cwd, &self.settings.sessions_root()) {
+            self.settings.push_recent_dir(&cwd);
+            self.settings_dirty = true;
+        }
         if self.models.is_empty() {
             self.backend.send(Cmd::ListModels);
         }
         id
     }
 
-    fn agent_spec(&self, view: &AgentView, prompt: Option<String>, resume: Option<String>) -> AgentSpec {
+    /// A new session the way the user set it up: in its own folder under the sessions folder
+    /// (named after its first message), or in the last folder used.
+    fn new_session(&mut self, prompt: Option<String>, incognito: bool) -> BayId {
+        if !self.settings.session_folders {
+            let dir = self.settings.default_dir();
+            return self.new_agent_ex(dir, prompt, None, None, incognito);
+        }
+        if let Some(p) = prompt {
+            let dir = self.create_session_folder(&p);
+            return self.new_agent_ex(dir, Some(p), None, None, incognito);
+        }
+        // Nothing to name it after yet: the folder and Copilot session start with the first message.
+        let id = self.alloc_bay();
+        let root = self.settings.sessions_root();
+        let mut view = AgentView::new(id, root.clone(), Mode::Interactive);
+        view.project = self.project_for(&root);
+        view.deferred = true;
+        view.incognito = incognito;
+        view.status = Status::Idle;
+        self.bays.push(Bay { id, kind: BayKind::Agent(Box::new(view)) });
+        self.focus(self.bays.len() - 1);
+        if self.models.is_empty() {
+            self.backend.send(Cmd::ListModels);
+        }
+        id
+    }
+
+    fn create_session_folder(&mut self, first_message: &str) -> PathBuf {
+        let root = self.settings.sessions_root();
+        match sessions::create_folder(&root, &sessions::short_title(first_message)) {
+            Ok(dir) => dir,
+            Err(e) => {
+                self.toast(Level::Error, format!("Couldn't create a folder in {}: {e}", settings::short_path(&root)));
+                self.settings.default_dir()
+            }
+        }
+    }
+
+    /// The first message of a deferred session: create its folder, then start it with the message.
+    fn start_deferred(&mut self, index: usize, text: String) {
+        let dir = self.create_session_folder(&text);
+        let project = self.project_for(&dir);
+        let enabled = self.settings.memory.enabled;
+        let Some(Bay { id, kind: BayKind::Agent(view) }) = self.bays.get_mut(index) else { return };
+        let bay = *id;
+        let files = std::mem::take(&mut view.attachments);
+        view.granted.lock().extend(files.iter().cloned());
+        view.cwd = dir;
+        view.project = project;
+        view.deferred = false;
+        view.title = Some(text.clone());
+        let names = files.iter().map(|p| settings::dir_name(p)).collect();
+        view.echo_user_with(&text, names);
+        capture_explicit_memory(&self.memory, enabled, view, &text);
+        let Some(Bay { kind: BayKind::Agent(view), .. }) = self.bays.get(index) else { return };
+        let spec = self.agent_spec(view, Some(text.clone()), files, None);
+        self.backend.send(Cmd::Create { bay, spec });
+        let name = view.name.clone().unwrap_or_else(|| sessions::short_title(&text));
+        let user = view.name.is_some();
+        self.backend.send(Cmd::NameSession { bay, name, user });
+    }
+
+    /// Memory scope for a folder: every session folder shares the sessions folder's scope.
+    fn project_for(&self, dir: &std::path::Path) -> Project {
+        let root = self.settings.sessions_root();
+        Project::for_dir(if sessions::is_under(dir, &root) { &root } else { dir })
+    }
+
+    fn agent_spec(&self, view: &AgentView, prompt: Option<String>, files: Vec<PathBuf>, resume: Option<String>) -> AgentSpec {
         let memory = (self.settings.memory.enabled && !view.incognito).then(|| crate::agent::backend::AgentMemory {
             store: self.memory.clone(),
             project: view.project.clone(),
         });
         AgentSpec {
             cwd: view.cwd.clone(),
-            model: self.settings.default_model.clone(),
-            mode: Mode::Interactive,
+            // Choices made before the session existed (a deferred one) carry over.
+            model: view.model.clone().or_else(|| self.settings.default_model.clone()),
+            mode: view.mode,
             prompt,
+            files,
             auto_approve: view.auto_approve.clone(),
             resume,
             granted: view.granted.clone(),
@@ -403,7 +517,7 @@ impl GraysenseApp {
         v.learn_cursor = 0;
         v.notice(Level::Info, "That session is no longer available, so this is a new one.");
         let Some(Bay { kind: BayKind::Agent(v), .. }) = self.bays.iter().find(|b| b.id == bay) else { return false };
-        let spec = self.agent_spec(v, None, None);
+        let spec = self.agent_spec(v, None, Vec::new(), None);
         self.backend.send(Cmd::Create { bay, spec });
         true
     }
@@ -615,6 +729,14 @@ impl GraysenseApp {
         }
     }
 
+    /// The focused bay's folder, unless it's a session that hasn't got one yet.
+    fn live_focused_dir(&self) -> Option<PathBuf> {
+        match &self.bays.get(self.focused)?.kind {
+            BayKind::Agent(v) if v.deferred => None,
+            _ => self.focused_dir().filter(|d| d.is_dir()),
+        }
+    }
+
     /// Resume a past session in the directory it was created in.
     fn resume_session(&mut self, id: String) {
         if let Some(i) = self.bays.iter().position(|b| matches!(&b.kind, BayKind::Agent(v) if v.session_id.as_deref() == Some(id.as_str()))) {
@@ -675,8 +797,16 @@ impl GraysenseApp {
 
     fn launch_mission(&mut self, id: u64) {
         let Some(m) = self.missions.get(id).cloned() else { return };
-        let cwd = m.dir.as_ref().map(PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(|| self.settings.default_dir());
-        let bay = self.new_agent(cwd, Some(m.brief()), None, Some(id));
+        let bay = match m.dir.as_ref().map(PathBuf::from).filter(|p| p.is_dir()) {
+            Some(dir) => self.new_agent(dir, Some(m.brief()), None, Some(id)),
+            None => {
+                let bay = self.new_session(Some(m.brief()), false);
+                if let Some(v) = self.agent_mut(bay) {
+                    v.mission = Some(id);
+                }
+                bay
+            }
+        };
         self.missions.link(id, bay);
         self.toast(Level::Ok, format!("Launched “{}”", m.title));
     }
@@ -686,6 +816,12 @@ impl GraysenseApp {
         let Some(bay) = self.bays.get_mut(index) else { return };
         let bay_id = bay.id;
         match &mut bay.kind {
+            BayKind::Agent(v) if v.deferred => {
+                v.mission = Some(id);
+                self.start_deferred(index, m.brief());
+                self.missions.link(id, bay_id);
+                self.toast(Level::Ok, format!("Delegated “{}”", m.title));
+            }
             BayKind::Agent(v) => {
                 v.echo_user(&m.brief());
                 v.mission = Some(id);
@@ -787,6 +923,173 @@ impl GraysenseApp {
         self.refresh_side();
     }
 
+    /// Search sessions and their files (Ctrl+K).
+    fn open_search(&mut self, query: &str) {
+        self.search_ui.open_with(query);
+        self.refresh_search_index(false);
+    }
+
+    /// Rebuild the search index in the background (unless one is fresh or already building).
+    fn refresh_search_index(&mut self, force: bool) {
+        if self.search_rx.is_some() || (!force && self.search_built.is_some_and(|t| t.elapsed() < Duration::from_secs(30))) {
+            return;
+        }
+        let root = self.settings.sessions_root();
+        let mut transcripts = 0;
+        let sources: Vec<crate::search::SessionSource> = self
+            .sessions
+            .iter()
+            .map(|s| {
+                let folder = self.session_index.get(&s.id).and_then(|m| m.folder.clone()).map(PathBuf::from);
+                let ours = s.client.as_deref().is_some_and(|c| c.starts_with("graysense")) || folder.as_deref().is_some_and(|f| sessions::is_under(f, &root));
+                // Conversations are indexed for Graysense's own recent sessions; others by name.
+                let transcript = ours && {
+                    transcripts += 1;
+                    transcripts <= 300
+                };
+                let modified = chrono::DateTime::parse_from_rfc3339(&s.modified).map(|d| d.timestamp()).unwrap_or(0);
+                crate::search::SessionSource { id: s.id.clone(), title: self.session_title(s), folder, modified, transcript }
+            })
+            .collect();
+        let state_dir = dirs::home_dir().unwrap_or_default().join(".copilot").join("session-state");
+        let cache_dir = settings::config_dir().join("search");
+        let (tx, rx) = channel();
+        let ctx = self.egui_ctx.clone();
+        std::thread::spawn(move || {
+            let index = crate::search::Index::build(&root, &sources, &state_dir, &cache_dir);
+            let _ = tx.send(index);
+            ctx.request_repaint();
+        });
+        self.search_rx = Some(rx);
+    }
+
+    fn poll_search_index(&mut self) {
+        let Some(rx) = &self.search_rx else { return };
+        if let Ok(index) = rx.try_recv() {
+            tracing::info!(sessions = index.stats.sessions, transcripts = index.stats.transcripts, files = index.stats.files, kb = index.stats.bytes / 1024, ms = index.stats.millis as u64, "search index built");
+            self.search_index = Arc::new(index);
+            self.search_gen += 1;
+            self.search_built = Some(Instant::now());
+            self.search_rx = None;
+        }
+    }
+
+    fn search_overlay(&mut self, ctx: &egui::Context) {
+        let stats = &self.search_index.stats;
+        let status = if self.search_rx.is_some() && self.search_built.is_none() {
+            "Indexing…".to_owned()
+        } else {
+            format!("{} sessions  ·  {} files{}", stats.sessions, stats.files, if self.search_rx.is_some() { "  ·  updating…" } else { "" })
+        };
+        let focused_agent = self.bays.get(self.focused).filter(|b| matches!(b.kind, BayKind::Agent(_))).map(|b| b.id);
+        let index = self.search_index.clone();
+        let theme = self.theme.clone();
+        let Some(action) = self.search_ui.show(ctx, &theme, &index, self.search_gen, &status, focused_agent.is_some()) else { return };
+        use crate::search_ui::SearchAction;
+        match action {
+            SearchAction::OpenSession(id) => self.resume_session(id),
+            SearchAction::OpenFile(p) => open_path(&p),
+            SearchAction::RevealFile(p) => reveal_path(&p),
+            SearchAction::AttachFile(p) => {
+                if let Some(v) = focused_agent.and_then(|b| self.agent_mut(b)) {
+                    let name = settings::dir_name(&p);
+                    if !v.attachments.contains(&p) {
+                        v.attachments.push(p);
+                    }
+                    v.focus_composer = true;
+                    self.focus_bay = true;
+                    self.toast(Level::Ok, format!("Attached {name}"));
+                }
+            }
+        }
+    }
+
+    /// Every shortcut on one sheet (Ctrl+/), like chat apps and editors offer.
+    fn shortcuts_overlay(&mut self, ctx: &egui::Context) {
+        const GROUPS: [(&str, &[(&[&str], &str)]); 4] = [
+            (
+                "General",
+                &[
+                    (&["Ctrl", "K"], "Search sessions and files"),
+                    (&["Ctrl", "Shift", "P"], "Command palette"),
+                    (&["Ctrl", "/"], "Keyboard shortcuts"),
+                    (&["Ctrl", "Shift", "B"], "Toggle the side panel"),
+                    (&["Ctrl", "Shift", "H"], "Sessions"),
+                    (&["Ctrl", "Shift", "M"], "Memory"),
+                    (&["Ctrl", "Shift", "I"], "Capture an idea"),
+                ],
+            ),
+            (
+                "Sessions and bays",
+                &[
+                    (&["Ctrl", "Shift", "N"], "New session"),
+                    (&["Ctrl", "Shift", "T"], "New terminal in the current folder"),
+                    (&["Ctrl", "Shift", "W"], "Close bay"),
+                    (&["Ctrl", "Tab"], "Next bay"),
+                    (&["Ctrl", "Alt", "1–9"], "Go to bay"),
+                    (&["Ctrl", "Shift", "Enter"], "Maximize bay"),
+                    (&["Ctrl", "Shift", "L"], "Cycle layout"),
+                ],
+            ),
+            (
+                "Message box",
+                &[(&["Enter"], "Send"), (&["Shift", "Enter"], "New line"), (&["Esc"], "Stop the agent"), (&["↑"], "Previous message"), (&["/"], "Commands"), (&["Tab"], "Complete a command")],
+            ),
+            ("Terminal", &[(&["Ctrl", "="], "Larger font"), (&["Ctrl", "-"], "Smaller font"), (&["Ctrl", "0"], "Reset font size")]),
+        ];
+        let theme = self.theme.clone();
+        let frame = Frame::new().fill(theme.surface).stroke(Stroke::new(1.0, theme.border_strong)).corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(20));
+        let modal = egui::Modal::new(Id::unique("shortcuts")).frame(frame).backdrop_color(theme::with_alpha(Color32::BLACK, 0.45)).show(ctx, |ui| {
+            ui.set_width(660.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Keyboard shortcuts").font(semibold(16.0)));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if kit::icon_button_sized(ui, icon::CANCEL, "Close (Esc)", &theme, 26.0, false).clicked() {
+                        self.show_shortcuts = false;
+                    }
+                });
+            });
+            ui.add_space(10.0);
+            ui.columns(2, |cols| {
+                for (gi, (group, items)) in GROUPS.iter().enumerate() {
+                    let ui = &mut cols[if gi % 2 == 0 { 0 } else { 1 }];
+                    kit::section(ui, group, &theme);
+                    for (keys, what) in items.iter() {
+                        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+                        ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, *what, ui_font(12.5), theme.text);
+                        kit::kbd(ui.painter(), pos2(r.right() - 6.0, r.center().y), keys, &theme);
+                    }
+                    ui.add_space(8.0);
+                }
+            });
+        });
+        if modal.should_close() {
+            self.show_shortcuts = false;
+        }
+    }
+
+    /// Apply settings an agent changed (the Settings panel applies its own as you click).
+    fn settings_changed(&mut self, ctx: &egui::Context, before: &Settings) {
+        if self.settings.theme != before.theme {
+            let t = self.settings.theme;
+            self.set_theme(ctx, t);
+        }
+        if self.settings.term_font_size != before.term_font_size {
+            self.set_font(self.settings.term_font_size);
+        }
+        if self.settings.side_panel != before.side_panel {
+            self.set_side(self.settings.side_panel);
+        }
+        if self.settings.side_width != before.side_width {
+            self.force_side_width = true;
+        }
+        if self.settings.layout != before.layout {
+            self.maximized = false;
+        }
+        crate::memory::set_switches(self.settings.memory.enabled, self.settings.memory.inject);
+        self.settings_dirty = true;
+    }
+
     // ------------------------------------------------------------------ events
 
     fn drain_events(&mut self, ctx: &egui::Context) {
@@ -803,15 +1106,43 @@ impl GraysenseApp {
                 }
                 if matches!(state, ClientState::Ready) {
                     self.backend.send(Cmd::ListModels);
+                    self.backend.send(Cmd::ListSessions);
                 }
                 self.client = state;
             }
+            Evt::Config { changes, reply } => {
+                let models: Vec<String> = self.models.iter().map(|m| m.id.clone()).collect();
+                let result = match changes {
+                    None => Ok(serde_json::json!({ "settings": self.settings.describe(&models), "to_change": "Call again with action \"set\" and `changes`." })),
+                    Some(changes) => {
+                        let before = self.settings.clone();
+                        self.settings.apply_patch(&changes, &models).map(|done| {
+                            self.settings_changed(ctx, &before);
+                            self.toast(Level::Ok, format!("Copilot changed {}", done.join(", ")));
+                            serde_json::json!({ "changed": done })
+                        })
+                    }
+                };
+                let _ = reply.send(result);
+            }
             Evt::SessionReady { bay, session_id } => {
                 self.missions.on_session(bay, &session_id);
+                let mut known = None;
                 if let Some(v) = self.agent_mut(bay) {
-                    v.session_id = Some(session_id);
+                    v.session_id = Some(session_id.clone());
                     if v.status == Status::Booting {
                         v.status = Status::Idle;
+                    }
+                    known = Some((v.cwd.display().to_string(), v.title.as_deref().map(sessions::short_title), v.name.clone()));
+                }
+                if let Some((folder, auto_name, name)) = known {
+                    let e = self.session_index.entry(&session_id);
+                    e.folder = Some(folder);
+                    if e.auto_name.is_none() {
+                        e.auto_name = auto_name;
+                    }
+                    if name.is_some() {
+                        e.name = name;
                     }
                 }
                 if self.settings.side_panel == Some(SidePanel::Mcp) {
@@ -896,7 +1227,12 @@ impl GraysenseApp {
                     self.resume_learn_queue();
                 }
             }
-            Evt::Sessions(s) => self.sessions = s,
+            Evt::Sessions(s) => {
+                self.sessions = s;
+                if self.search_built.is_none() {
+                    self.refresh_search_index(true);
+                }
+            }
             Evt::McpServers { servers, live_bay } => {
                 self.mcp.servers = Some(servers);
                 self.mcp.live_bay = live_bay;
@@ -1009,6 +1345,11 @@ impl GraysenseApp {
             }
             Pick::Shell => self.new_shell(ctx, dir),
             Pick::Mission(id) => self.missions.set_dir(id, dir),
+            Pick::SessionsRoot => {
+                self.toast(Level::Ok, format!("New sessions will go in {}", settings::short_path(&dir)));
+                self.settings.sessions_root = Some(dir.display().to_string());
+                self.settings_dirty = true;
+            }
             Pick::Attach(bay) => {
                 if let Some(v) = self.agent_mut(bay) {
                     for p in paths {
@@ -1082,16 +1423,15 @@ impl GraysenseApp {
     fn run(&mut self, cmd: Command, ctx: &egui::Context) {
         match cmd {
             Command::NewAgent => {
-                let dir = self.settings.default_dir();
-                self.new_agent(dir, None, None, None);
+                self.new_session(None, false);
             }
             Command::NewAgentIn => self.palette.open(PaletteMode::Dirs { agent: true }),
             Command::NewIncognitoAgent => {
-                let dir = self.focused_dir().unwrap_or_else(|| self.settings.default_dir());
-                self.new_agent_ex(dir, None, None, None, true);
+                self.new_session(None, true);
             }
             Command::NewShell => {
-                let dir = self.settings.default_dir();
+                // Like VS Code's terminal: open where the focused bay works.
+                let dir = self.live_focused_dir().unwrap_or_else(|| self.settings.default_dir());
                 self.new_shell(ctx, dir);
             }
             Command::NewShellIn => self.palette.open(PaletteMode::Dirs { agent: false }),
@@ -1163,6 +1503,8 @@ impl GraysenseApp {
                 self.memory_panel.show_review();
                 self.set_side(Some(SidePanel::Memory));
             }
+            Command::Search => self.open_search(""),
+            Command::Shortcuts => self.show_shortcuts = true,
         }
     }
 
@@ -1211,6 +1553,17 @@ impl GraysenseApp {
         }
         if sc(cs, Key::M) {
             cmds.push(if self.settings.side_panel == Some(SidePanel::Memory) { Command::ToggleSide } else { Command::Side(SidePanel::Memory) });
+        }
+        if sc(cs, Key::H) {
+            cmds.push(if self.settings.side_panel == Some(SidePanel::Sessions) { Command::ToggleSide } else { Command::Side(SidePanel::Sessions) });
+        }
+        // Ctrl+K and Ctrl+/ belong to the shell while a terminal has focus (kill line, undo).
+        let in_terminal = matches!(self.bays.get(self.focused), Some(Bay { kind: BayKind::Shell(_), .. })) && ctx.memory(|m| m.focused().is_none());
+        if sc(cs, Key::F) || (!in_terminal && sc(Modifiers::CTRL, Key::K)) {
+            cmds.push(Command::Search);
+        }
+        if !in_terminal && sc(Modifiers::CTRL, Key::Slash) {
+            cmds.push(Command::Shortcuts);
         }
         if sc(Modifiers::CTRL, Key::Equals) || sc(Modifiers::CTRL, Key::Plus) {
             cmds.push(Command::FontBigger);
@@ -1404,9 +1757,9 @@ impl GraysenseApp {
         let mut cmd = None;
         egui::Popup::menu(&presp).width(230.0).show(|ui| {
             let items = [
-                (icon::BOT, "New Copilot agent", Command::NewAgent),
-                (icon::OPEN_FOLDER, "New agent in folder…", Command::NewAgentIn),
-                (icon::HIDE, "New incognito agent", Command::NewIncognitoAgent),
+                (icon::BOT, "New session", Command::NewAgent),
+                (icon::OPEN_FOLDER, "New session in folder…", Command::NewAgentIn),
+                (icon::HIDE, "New incognito session", Command::NewIncognitoAgent),
                 (icon::TERMINAL, "New terminal", Command::NewShell),
                 (icon::HISTORY, "Resume a session…", Command::Resume),
             ];
@@ -1515,7 +1868,7 @@ impl GraysenseApp {
             let inbox = self.memory.lock().inbox_count();
             let items = [
                 (SidePanel::Missions, icon::LIGHTBULB, "Missions  (Ctrl+Shift+I)", self.missions.open_count()),
-                (SidePanel::Sessions, icon::HISTORY, "Agents & activity", pending),
+                (SidePanel::Sessions, icon::HISTORY, "Sessions  (Ctrl+Shift+H)", pending),
                 (SidePanel::Memory, icon::MEMORY, "Memory", inbox),
                 (SidePanel::Mcp, icon::CONNECT, "MCP servers", 0),
                 (SidePanel::Plugins, icon::PUZZLE, "Plugins", 0),
@@ -1563,11 +1916,15 @@ impl GraysenseApp {
     fn side_panel(&mut self, ui: &mut Ui) {
         let Some(panel) = self.settings.side_panel else { return };
         let theme = self.theme.clone();
-        let resp = egui::Panel::left("side")
+        let mut side = egui::Panel::left("side")
             .resizable(true)
             .default_size(self.settings.side_width)
             .min_size(260.0)
-            .max_size(620.0)
+            .max_size(620.0);
+        if std::mem::take(&mut self.force_side_width) {
+            side = side.exact_size(self.settings.side_width);
+        }
+        let resp = side
             .frame(Frame::new().fill(theme.surface).inner_margin(Margin::symmetric(14, 12)))
             .show(ui, |ui| match panel {
                 SidePanel::Missions => self.missions_panel(ui, &theme),
@@ -1642,98 +1999,105 @@ impl GraysenseApp {
     }
 
     fn sessions_panel(&mut self, ui: &mut Ui, theme: &Theme) {
-        ui.label(RichText::new("Agents").font(semibold(15.0)));
-        ui.add_space(4.0);
-        let mut focus = None;
-        for (i, b) in self.bays.iter().enumerate() {
-            let BayKind::Agent(v) = &b.kind else { continue };
-            Frame::new()
-                .fill(if i == self.focused { theme.surface3 } else { theme.surface2 })
-                .stroke(Stroke::new(1.0, theme.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::symmetric(10, 7))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    let r = ui
-                        .horizontal(|ui| {
-                            let (dr, _) = ui.allocate_exact_size(vec2(10.0, 16.0), Sense::hover());
-                            kit::dot(ui.painter(), dr.center(), 3.5, agent_view::status_color(&v.status, theme));
-                            // Long titles are elided to the space left, so they never widen the panel.
-                            let status = v.status.label().to_string();
-                            let sw = ui.painter().layout_no_wrap(status.clone(), ui_font(11.5), theme.text_dim).size().x;
-                            let tw = (ui.available_width() - sw - ui.spacing().item_spacing.x * 2.0).max(30.0);
-                            let title = v.display_title();
-                            let g = kit::elided(ui.painter(), &title, semibold(13.0), theme.text, tw);
-                            let (tr, tresp) = ui.allocate_exact_size(vec2(g.size().x, 18.0), Sense::hover());
-                            if g.elided {
-                                tresp.on_hover_text(&title);
-                            }
-                            ui.painter().galley(pos2(tr.left(), tr.center().y - g.size().y / 2.0), g, theme.text);
-                            ui.label(RichText::new(status).font(ui_font(11.5)).color(theme.text_dim));
-                        })
-                        .response;
-                    if let Some(intent) = &v.intent {
-                        ui.label(RichText::new(intent).font(ui_font(12.0)).color(theme.text_dim));
-                    }
-                    ui.horizontal(|ui| {
-                        let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-                        let stats: Vec<String> = [(v.turns as usize, "turn"), (v.tool_count as usize, "tool call"), (v.files.len(), "file")]
-                            .into_iter()
-                            .filter(|(n, _)| *n > 0)
-                            .map(|(n, w)| plural(n, w))
-                            .collect();
-                        let stats = if stats.is_empty() { "No activity yet".to_owned() } else { stats.join(" · ") };
-                        ui.label(RichText::new(stats).font(ui_font(11.5)).color(theme.text_faint));
-                        let (sr, _) = ui.allocate_exact_size(vec2(60.0, 12.0), Sense::hover());
-                        kit::sparkline(ui.painter(), sr, &v.history, 1.0, theme.accent);
-                    });
-                    if r.interact(Sense::click()).clicked() {
-                        focus = Some(i);
-                    }
-                });
-            ui.add_space(4.0);
-        }
-        if !self.bays.iter().any(|b| matches!(b.kind, BayKind::Agent(_))) {
-            ui.label(RichText::new("No agents running. Press Ctrl+Shift+N to start one.").color(theme.text_dim));
-        }
-        if let Some(i) = focus {
-            self.focus(i);
-        }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            kit::section(ui, "Past sessions", theme);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if kit::mini_button(ui, "Browse all", theme).clicked() {
-                    self.backend.send(Cmd::ListSessions);
-                    self.palette.open(PaletteMode::Sessions);
-                }
-            });
-        });
-        let mut resume = None;
+        use crate::control::sessions::{OpenRow, PastRow, SessionsAction};
+        let t = self.t0.elapsed().as_secs_f32();
+        let open: Vec<OpenRow> = self
+            .bays
+            .iter()
+            .enumerate()
+            .filter_map(|(index, b)| match &b.kind {
+                BayKind::Agent(v) => Some(OpenRow { index, title: v.display_title(), status: v.status.label(), color: agent_view::status_color(&v.status, theme), busy: v.status.is_busy() }),
+                _ => None,
+            })
+            .collect();
+        let open_ids: std::collections::HashSet<&str> = self.bays.iter().filter_map(|b| if let BayKind::Agent(v) = &b.kind { v.session_id.as_deref() } else { None }).collect();
         let now = chrono::Utc::now();
-        for s in self.sessions.iter().take(8) {
-            let title = s.summary.clone().filter(|x| !x.is_empty()).unwrap_or_else(|| format!("Session {}", &s.id[..8.min(s.id.len())]));
-            let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
-            let resp = resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Resume in a new agent");
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Resume {title}")));
-            let p = ui.painter();
-            if resp.hovered() {
-                p.rect_filled(row, CornerRadius::same(6), theme.surface2);
-            }
-            p.text(pos2(row.left() + 12.0, row.center().y), Align2::CENTER_CENTER, icon::HISTORY, icon_font(11.0), theme.text_faint);
-            let when = relative_time(&s.modified, now);
-            let wr = p.text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, when, ui_font(11.0), theme.text_faint);
-            let g = kit::elided(p, &title, ui_font(12.5), if resp.hovered() { theme.text } else { theme.text_dim }, (wr.left() - row.left() - 38.0).max(20.0));
-            p.galley(pos2(row.left() + 26.0, row.center().y - g.size().y / 2.0), g, theme.text_dim);
-            if resp.clicked() {
-                resume = Some(s.id.clone());
+        let past: Vec<PastRow> = self
+            .sessions
+            .iter()
+            .filter(|s| !open_ids.contains(s.id.as_str()))
+            .map(|s| {
+                let modified = chrono::DateTime::parse_from_rfc3339(&s.modified).ok().map(|d| d.with_timezone(&chrono::Local));
+                PastRow {
+                    title: self.session_title(s),
+                    when: modified.map(|m| session_when(m, &s.modified, now)).unwrap_or_default(),
+                    modified,
+                    pinned: self.session_index.pinned(&s.id),
+                    cli: s.client.as_deref().is_some_and(|c| !c.starts_with("graysense")),
+                    id: s.id.clone(),
+                }
+            })
+            .collect();
+
+        // The list fills the panel; a collapsible activity feed sits at the bottom.
+        let full = ui.available_rect_before_wrap();
+        let activity_h = if self.show_activity { (full.height() * 0.35).clamp(120.0, 260.0) } else { 30.0 };
+        let list = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - activity_h));
+        let actions = ui.scope_builder(UiBuilder::new().max_rect(list), |ui| self.sessions_panel_ui.show(ui, theme, &open, &past, t)).inner;
+        let activity = Rect::from_min_max(pos2(full.left(), full.bottom() - activity_h), full.max);
+        ui.scope_builder(UiBuilder::new().max_rect(activity), |ui| self.activity_ui(ui, theme));
+        ui.allocate_rect(full, Sense::hover());
+
+        for a in actions {
+            match a {
+                SessionsAction::New => self.run(Command::NewAgent, &ui.ctx().clone()),
+                SessionsAction::Focus(i) => self.focus(i),
+                SessionsAction::Resume(id) => self.resume_session(id),
+                SessionsAction::Rename(id, name) => match self.bays.iter().position(|b| matches!(&b.kind, BayKind::Agent(v) if v.session_id.as_deref() == Some(id.as_str()))) {
+                    Some(i) => self.rename_bay(i, name),
+                    None => self.session_index.entry(&id).name = (!name.is_empty()).then_some(name),
+                },
+                SessionsAction::Pin(id, pinned) => self.session_index.entry(&id).pinned = pinned,
+                SessionsAction::Reveal(id) => {
+                    let folder = self.session_index.get(&id).and_then(|m| m.folder.clone()).map(PathBuf::from).or_else(|| session_cwd(&id));
+                    match folder.filter(|f| f.is_dir()) {
+                        Some(f) => {
+                            let _ = std::process::Command::new("explorer").arg(f).spawn();
+                        }
+                        None => self.toast(Level::Warn, "That session's folder no longer exists"),
+                    }
+                }
+                SessionsAction::Delete(id) => {
+                    if let Some(i) = self.bays.iter().position(|b| matches!(&b.kind, BayKind::Agent(v) if v.session_id.as_deref() == Some(id.as_str()))) {
+                        self.close_bay(i);
+                    }
+                    self.sessions.retain(|s| s.id != id);
+                    self.session_index.remove(&id);
+                    self.backend.send(Cmd::DeleteSession { id });
+                    self.toast(Level::Ok, "Session deleted. Its files are still in its folder.");
+                }
+                SessionsAction::Search(q) => self.open_search(&q),
             }
         }
-        if let Some(id) = resume {
-            self.resume_session(id);
+    }
+
+    /// The best name for a past session: the user's, then Graysense's short title, then Copilot's.
+    fn session_title(&self, s: &SessionInfo) -> String {
+        let meta = self.session_index.get(&s.id);
+        if let Some(name) = meta.and_then(|m| m.name.as_deref()) {
+            return name.to_owned();
         }
-        ui.add_space(8.0);
-        kit::section(ui, "Activity", theme);
+        meta.and_then(|m| m.auto_name.as_deref())
+            .or(s.summary.as_deref())
+            .filter(|x| !x.trim().is_empty())
+            .map(sessions::short_title)
+            .unwrap_or_else(|| format!("Session {}", &s.id[..8.min(s.id.len())]))
+    }
+
+    fn activity_ui(&mut self, ui: &mut Ui, theme: &Theme) {
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+        let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, self.show_activity, "Activity"));
+        let p = ui.painter();
+        p.hline(r.x_range(), r.top(), Stroke::new(1.0, theme.border));
+        p.text(pos2(r.left() + 8.0, r.center().y), Align2::LEFT_CENTER, "ACTIVITY", semibold(10.5), if resp.hovered() { theme.text_dim } else { theme.text_faint });
+        p.text(pos2(r.right() - 10.0, r.center().y), Align2::CENTER_CENTER, if self.show_activity { icon::CHEVRON_DOWN } else { icon::CHEVRON_UP }, icon_font(9.0), theme.text_faint);
+        if resp.clicked() {
+            self.show_activity = !self.show_activity;
+        }
+        if !self.show_activity {
+            return;
+        }
         egui::ScrollArea::vertical().id_salt("activity").auto_shrink([false; 2]).show(ui, |ui| {
             if self.activity.is_empty() {
                 ui.label(RichText::new("Agent activity will appear here.").color(theme.text_faint));
@@ -1756,9 +2120,14 @@ impl GraysenseApp {
     }
 
     fn settings_panel(&mut self, ui: &mut Ui, theme: &Theme) {
-        let ctx = ui.ctx().clone();
         ui.label(RichText::new("Settings").font(semibold(15.0)));
+        ui.add(egui::Label::new(RichText::new("Agents can change any of these for you: try “switch to the light theme”.").font(ui_font(11.5)).color(theme.text_faint)).wrap());
         ui.add_space(6.0);
+        egui::ScrollArea::vertical().id_salt("settings-scroll").auto_shrink([false; 2]).show(ui, |ui| self.settings_sections(ui, theme));
+    }
+
+    fn settings_sections(&mut self, ui: &mut Ui, theme: &Theme) {
+        let ctx = ui.ctx().clone();
         kit::section(ui, "Appearance", theme);
         let mut pick = None;
         ui.horizontal_wrapped(|ui| {
@@ -1823,6 +2192,34 @@ impl GraysenseApp {
             }
         });
         ui.add_space(8.0);
+        kit::section(ui, "Sessions", theme);
+        let mut own = self.settings.session_folders;
+        if kit::toggle_row(ui, &mut own, theme, "Give each new session its own folder").changed() {
+            self.settings.session_folders = own;
+            self.settings_dirty = true;
+        }
+        ui.label(RichText::new("Sessions folder").color(theme.text_dim));
+        let root = self.settings.sessions_root();
+        let g = kit::elided(ui.painter(), &settings::short_path(&root), theme::mono(12.0), theme.text, ui.available_width());
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+        ui.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, theme.text);
+        resp.on_hover_text(root.display().to_string());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if kit::mini_button(ui, "Change…", theme).clicked() {
+                self.pick_dir(Pick::SessionsRoot);
+            }
+            if kit::mini_button(ui, "Open", theme).clicked() {
+                let _ = std::fs::create_dir_all(&root);
+                let _ = std::process::Command::new("explorer").arg(&root).spawn();
+            }
+            if self.settings.sessions_root.is_some() && kit::mini_button(ui, "Use default", theme).clicked() {
+                self.settings.sessions_root = None;
+                self.settings_dirty = true;
+            }
+        });
+        ui.add(egui::Label::new(RichText::new("New sessions get a folder here named after their first message. Search (Ctrl+K) covers what's in them.").font(ui_font(11.5)).color(theme.text_faint)).wrap());
+        ui.add_space(8.0);
         kit::section(ui, "Terminal", theme);
         ui.label(RichText::new("Shell (empty = pwsh, then Windows PowerShell)").color(theme.text_dim));
         let mut shell = self.settings.shell.clone().unwrap_or_default();
@@ -1832,24 +2229,12 @@ impl GraysenseApp {
         }
         ui.add_space(8.0);
         kit::section(ui, "Shortcuts", theme);
-        for (k, d) in [
-            ("Ctrl Shift P", "Command palette"),
-            ("Ctrl Shift N", "New Copilot agent"),
-            ("Ctrl Shift T", "New terminal"),
-            ("Ctrl Shift I", "Capture an idea"),
-            ("Ctrl Shift W", "Close bay"),
-            ("Ctrl Tab", "Next bay"),
-            ("Ctrl Shift Enter", "Maximize bay"),
-            ("Ctrl Shift L", "Cycle layout"),
-            ("Ctrl Shift B", "Toggle side panel"),
-        ] {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(d).color(theme.text_dim));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(k).font(ui_font(11.5)).color(theme.text_faint));
-                });
-            });
-        }
+        ui.horizontal(|ui| {
+            if kit::ghost_button(ui, "Keyboard shortcuts", theme).clicked() {
+                self.show_shortcuts = true;
+            }
+            ui.label(RichText::new("Ctrl+/").font(ui_font(11.5)).color(theme.text_faint));
+        });
         ui.add_space(8.0);
         if ui.button(format!("{}  Open config folder", icon::FOLDER)).clicked() {
             self.run(Command::OpenConfig, &ctx);
@@ -1910,21 +2295,30 @@ impl GraysenseApp {
     fn welcome(&mut self, ui: &mut Ui, area: Rect) {
         let theme = self.theme.clone();
         let ctx = ui.ctx().clone();
-        let c = area.center();
+        // Like an editor's start page: what to do, then where you left off.
+        let now = chrono::Utc::now();
+        let recent: Vec<(String, String, String)> = self.sessions.iter().take(5).map(|s| (s.id.clone(), self.session_title(s), relative_time(&s.modified, now))).collect();
+        let col_w = 340.0;
+        let start_h = 4.0 * 40.0;
+        let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * 32.0 + 32.0 };
+        let total = 150.0 + start_h + recent_h;
+        let top = (area.center().y - total / 2.0).max(area.top() + 24.0);
+        let cx = area.center().x;
         let p = ui.painter();
-        kit::mark(p, c - vec2(0.0, 120.0), 44.0, &theme);
-        p.text(c - vec2(0.0, 72.0), Align2::CENTER_CENTER, "Graysense", semibold(24.0), theme.text);
-        p.text(c - vec2(0.0, 46.0), Align2::CENTER_CENTER, "A fast, flat terminal for Copilot agents", ui_font(13.5), theme.text_dim);
+        kit::mark(p, pos2(cx, top + 22.0), 44.0, &theme);
+        p.text(pos2(cx, top + 72.0), Align2::CENTER_CENTER, "Graysense", semibold(24.0), theme.text);
+        p.text(pos2(cx, top + 100.0), Align2::CENTER_CENTER, "A fast, flat terminal for Copilot agents", ui_font(13.5), theme.text_dim);
         let mut cmd = None;
-        let col = Rect::from_center_size(c + vec2(0.0, 60.0), vec2(320.0, 170.0));
+        let mut resume = None;
+        let col = Rect::from_min_size(pos2(cx - col_w / 2.0, top + 140.0), vec2(col_w, start_h + recent_h));
         ui.scope_builder(UiBuilder::new().max_rect(col), |ui| {
             for (glyph, label, keys, command) in [
-                (icon::BOT, "New Copilot agent", &["Ctrl", "Shift", "N"][..], Command::NewAgent),
+                (icon::BOT, "New session", &["Ctrl", "Shift", "N"][..], Command::NewAgent),
                 (icon::TERMINAL, "New terminal", &["Ctrl", "Shift", "T"][..], Command::NewShell),
-                (icon::HISTORY, "Resume a session", &[][..], Command::Resume),
+                (icon::SEARCH, "Search sessions and files", &["Ctrl", "K"][..], Command::Search),
                 (icon::LIGHTBULB, "Capture an idea", &["Ctrl", "Shift", "I"][..], Command::CaptureIdea),
             ] {
-                let (r, resp) = ui.allocate_exact_size(vec2(320.0, 36.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(col_w, 36.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
                 let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
                 let p = ui.painter();
@@ -1941,7 +2335,43 @@ impl GraysenseApp {
                 }
                 ui.add_space(4.0);
             }
+            if recent.is_empty() {
+                return;
+            }
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(RichText::new("RECENT").font(semibold(10.5)).color(theme.text_faint));
+            });
+            ui.add_space(2.0);
+            for (id, title, when) in &recent {
+                let (r, resp) = ui.allocate_exact_size(vec2(col_w, 30.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Resume {title}")));
+                let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
+                let p = ui.painter();
+                if resp.hovered() {
+                    p.rect_filled(r, CornerRadius::same(8), theme.surface2);
+                }
+                p.text(r.left_center() + vec2(16.0, 0.0), Align2::CENTER_CENTER, icon::HISTORY, icon_font(12.0), theme.text_faint);
+                let wr = p.text(r.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, when, ui_font(11.5), theme.text_faint);
+                let g = kit::elided(p, title, ui_font(13.0), theme.text_dim, wr.left() - r.left() - 48.0);
+                p.galley(pos2(r.left() + 36.0, r.center().y - g.size().y / 2.0), g, if resp.hovered() { theme.text } else { theme.text_dim });
+                if resp.clicked() {
+                    resume = Some(id.clone());
+                }
+            }
+            ui.add_space(2.0);
+            let (r, resp) = ui.allocate_exact_size(vec2(col_w, 26.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "All sessions"));
+            let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
+            ui.painter().text(r.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, "All sessions…", ui_font(12.5), if resp.hovered() { theme.text } else { theme.accent });
+            if resp.clicked() {
+                cmd = Some(Command::Side(SidePanel::Sessions));
+            }
         });
+        if let Some(id) = resume {
+            self.resume_session(id);
+        }
         if let Some(c) = cmd {
             self.run(c, &ctx);
         }
@@ -2097,6 +2527,13 @@ impl GraysenseApp {
                 }
             },
             BayAction::Agent(i, a) => {
+                let deferred = matches!(self.bays.get(i), Some(Bay { kind: BayKind::Agent(v), .. }) if v.deferred);
+                match a {
+                    AgentAction::Send(text) if deferred => return self.start_deferred(i, text),
+                    AgentAction::Folder(f) => return self.folder_action(ctx, i, f),
+                    AgentAction::Rename(name) => return self.rename_bay(i, name),
+                    _ => {}
+                }
                 let Some(bay) = self.bays.get_mut(i) else { return };
                 let bay_id = bay.id;
                 let BayKind::Agent(view) = &mut bay.kind else { return };
@@ -2105,6 +2542,17 @@ impl GraysenseApp {
                         let files = std::mem::take(&mut view.attachments);
                         view.granted.lock().extend(files.iter().cloned());
                         let names = files.iter().map(|p| settings::dir_name(p)).collect();
+                        // The first message names the session (until the user names it).
+                        if view.title.is_none() {
+                            view.title = Some(text.clone());
+                            let name = sessions::short_title(&text);
+                            if let Some(id) = &view.session_id {
+                                self.session_index.entry(id).auto_name = Some(name.clone());
+                            }
+                            if view.name.is_none() {
+                                self.backend.send(Cmd::NameSession { bay: bay_id, name, user: false });
+                            }
+                        }
                         view.echo_user_with(&text, names);
                         view.learn_due = None;
                         capture_explicit_memory(&self.memory, self.settings.memory.enabled, view, &text);
@@ -2119,17 +2567,39 @@ impl GraysenseApp {
                         self.toast(Level::Ok, "Forgotten");
                     }
                     AgentAction::OpenMemory(id) => self.open_memory(id),
+                    AgentAction::Abort if deferred => {}
                     AgentAction::Abort => self.backend.send(Cmd::Abort { bay: bay_id }),
                     AgentAction::SetModel(m) => {
                         view.model = Some(m.clone());
-                        self.backend.send(Cmd::SetModel { bay: bay_id, model: m });
+                        if !deferred {
+                            self.backend.send(Cmd::SetModel { bay: bay_id, model: m });
+                        }
                     }
                     AgentAction::SetMode(m) => {
                         view.mode = m;
-                        self.backend.send(Cmd::SetMode { bay: bay_id, mode: m });
+                        if !deferred {
+                            self.backend.send(Cmd::SetMode { bay: bay_id, mode: m });
+                        }
                     }
                     AgentAction::OpenUrl(u) => ctx.open_url(egui::OpenUrl::new_tab(u)),
-                    AgentAction::Copy(text) => ctx.copy_text(text),
+                    AgentAction::Copy(text) => {
+                        ctx.copy_text(text);
+                        self.toast(Level::Ok, "Copied");
+                    }
+                    AgentAction::EditPrompt(text) => {
+                        view.composer = text;
+                        view.focus_composer = true;
+                    }
+                    AgentAction::File(f) => match f {
+                        crate::agent::files::FileAction::Open(p) => open_path(&p),
+                        crate::agent::files::FileAction::Reveal(p) => reveal_path(&p),
+                        crate::agent::files::FileAction::Attach(p) => {
+                            if !view.attachments.contains(&p) {
+                                view.attachments.push(p);
+                            }
+                            view.focus_composer = true;
+                        }
+                    },
                     AgentAction::Focus => {
                         self.focused = i;
                         view.focus_composer = true;
@@ -2144,7 +2614,52 @@ impl GraysenseApp {
                         let start = view.cwd.clone();
                         self.pick_attachments(bay_id, start);
                     }
+                    AgentAction::Folder(_) | AgentAction::Rename(_) => {}
                 }
+            }
+        }
+    }
+
+    fn folder_action(&mut self, ctx: &egui::Context, index: usize, action: agent_view::FolderAction) {
+        use agent_view::FolderAction;
+        let Some(Bay { kind: BayKind::Agent(v), .. }) = self.bays.get(index) else { return };
+        let dir = v.cwd.clone();
+        match action {
+            FolderAction::Reveal => {
+                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+            }
+            FolderAction::VsCode => {
+                if let Err(e) = open_in_vscode(&dir) {
+                    self.toast(Level::Error, e);
+                }
+            }
+            FolderAction::Terminal => self.new_shell(ctx, dir),
+            FolderAction::NewAgent => {
+                self.new_agent(dir, None, None, None);
+            }
+            FolderAction::CopyPath => {
+                ctx.copy_text(dir.display().to_string());
+                self.toast(Level::Ok, "Path copied");
+            }
+        }
+    }
+
+    /// Name a session (empty = back to its automatic name).
+    fn rename_bay(&mut self, index: usize, name: String) {
+        let name = name.trim().chars().take(100).collect::<String>();
+        let Some(Bay { id, kind: BayKind::Agent(v) }) = self.bays.get_mut(index) else { return };
+        let bay = *id;
+        v.name = (!name.is_empty()).then(|| name.clone());
+        let auto = v.title.as_deref().map(sessions::short_title);
+        let (session, deferred) = (v.session_id.clone(), v.deferred);
+        if let Some(sid) = &session {
+            self.session_index.entry(sid).name = v.name.clone();
+        }
+        if !deferred && session.is_some() {
+            match (name.is_empty(), auto) {
+                (false, _) => self.backend.send(Cmd::NameSession { bay, name, user: true }),
+                (true, Some(auto)) => self.backend.send(Cmd::NameSession { bay, name: auto, user: true }),
+                (true, None) => {}
             }
         }
     }
@@ -2241,11 +2756,67 @@ fn capture_explicit_memory(memory: &Mutex<MemoryStore>, enabled: bool, view: &mu
     }
 }
 
+/// Open a file for viewing with its default app (folders open in File Explorer). Files that would
+/// *run* when opened (scripts, programs) open in an editor instead: an agent may have written them.
+fn open_path(p: &std::path::Path) {
+    const RUNS: &[&str] = &["exe", "bat", "cmd", "com", "msi", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "scr", "lnk", "reg", "hta", "cpl", "pif", "appref-ms"];
+    let ext = p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if !p.is_dir() && RUNS.contains(&ext.as_str()) {
+        if open_in_vscode(p).is_err() {
+            let _ = std::process::Command::new("notepad").arg(p).spawn();
+        }
+        return;
+    }
+    let _ = std::process::Command::new("explorer").arg(p).spawn();
+}
+
+/// Show a file selected in File Explorer.
+fn reveal_path(p: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    if p.is_dir() {
+        let _ = std::process::Command::new("explorer").arg(p).spawn();
+    } else {
+        let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", p.display())).spawn();
+    }
+}
+
+/// Compact age for file lists: "now", "5m", "3h", "2d", "4mo".
+pub(crate) fn short_age(secs: u64) -> String {
+    match secs {
+        0..=59 => "now".into(),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        86_400..=2_591_999 => format!("{}d", secs / 86_400),
+        _ => format!("{}mo", secs / 2_592_000),
+    }
+}
+
+/// Open a folder in VS Code (a per-user or machine-wide install, or the `code` launcher on PATH).
+fn open_in_vscode(dir: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let installs = [dirs::data_local_dir().map(|d| d.join("Programs").join("Microsoft VS Code").join("Code.exe")), std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Microsoft VS Code").join("Code.exe"))];
+    let exe = installs.into_iter().flatten().find(|p| p.is_file()).or_else(|| settings::which("code.cmd"));
+    let Some(exe) = exe else { return Err("VS Code isn't installed, or `code` isn't on PATH".into()) };
+    // Batch launchers (code.cmd) are run by Rust through cmd.exe with safe quoting.
+    std::process::Command::new(exe).arg(dir).creation_flags(0x0800_0000).spawn().map(|_| ()).map_err(|e| format!("Couldn't start VS Code: {e}"))
+}
+
 /// Working directory a Copilot session was started in (from its `workspace.yaml`).
 fn session_cwd(id: &str) -> Option<PathBuf> {
     let file = dirs::home_dir()?.join(".copilot").join("session-state").join(id).join("workspace.yaml");
     let text = std::fs::read_to_string(file).ok()?;
     text.lines().find_map(|l| l.strip_prefix("cwd:")).map(|v| PathBuf::from(v.trim().trim_matches('"').trim_matches('\'')))
+}
+
+/// "When" for the sessions list, matching its date groups: "5m" today, "9:41 PM" yesterday,
+/// "Mon" this week, "Oct 3" before that.
+fn session_when(t: chrono::DateTime<chrono::Local>, iso: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    match (now.with_timezone(&chrono::Local).date_naive() - t.date_naive()).num_days() {
+        ..=0 => relative_time(iso, now),
+        1 => t.format("%-I:%M %p").to_string(),
+        2..=6 => t.format("%a").to_string(),
+        _ => t.format("%b %-d").to_string(),
+    }
 }
 
 /// "just now", "5m", "3h", "Yesterday", "Mon", "Nov 10".
@@ -2344,11 +2915,16 @@ impl eframe::App for GraysenseApp {
         if let Some(cmd) = self.palette.show(&ctx, &self.theme, &self.sessions, &self.settings.recent_dirs) {
             self.run(cmd, &ctx);
         }
+        if self.show_shortcuts {
+            self.shortcuts_overlay(&ctx);
+        }
+        self.poll_search_index();
+        self.search_overlay(&ctx);
         self.toasts_ui(&ctx);
         self.sync_window_title(&ctx);
 
         // Child webviews paint above egui: hide them while menus or the palette are open.
-        let overlay = self.palette.open || egui::Popup::is_any_open(&ctx);
+        let overlay = self.palette.open || self.show_shortcuts || self.search_ui.open || egui::Popup::is_any_open(&ctx);
         let theme = self.theme.clone();
         self.apps.layout(frame, &ctx, &placements, overlay, &theme);
         for (view, rect) in &placements {
@@ -2376,6 +2952,7 @@ impl eframe::App for GraysenseApp {
         if self.last_save.elapsed() > Duration::from_secs(3) {
             self.missions.save_if_dirty();
             self.memory.lock().save_if_dirty();
+            self.session_index.save_if_dirty();
             self.save_workspace_if_changed();
             if self.settings_dirty {
                 self.settings.save();
@@ -2397,6 +2974,7 @@ impl eframe::App for GraysenseApp {
         self.missions.save_if_dirty();
         self.queue_unread_conversations();
         self.memory.lock().save_if_dirty();
+        self.session_index.save_if_dirty();
         self.settings.save();
         self.backend.shutdown(&self.rt);
     }

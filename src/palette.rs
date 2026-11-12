@@ -33,6 +33,8 @@ pub enum Command {
     ReloadMcp,
     ToggleMemory,
     ReviewMemories,
+    Search,
+    Shortcuts,
     ResumeSession(String),
     OpenDir(String, bool),
     BrowseDir(bool),
@@ -72,9 +74,10 @@ impl Default for Palette {
 fn commands(memory_on: bool) -> Vec<Entry> {
     let e = |cmd, title: &str, icon, keys| Entry { cmd, title: title.into(), detail: String::new(), icon, keys };
     let mut v = vec![
-        e(Command::NewAgent, "New Copilot agent", icon::BOT, &["Ctrl", "Shift", "N"][..]),
-        e(Command::NewAgentIn, "New Copilot agent in folder…", icon::OPEN_FOLDER, &[][..]),
-        e(Command::NewIncognitoAgent, "New incognito agent (no memory)", icon::HIDE, &[][..]),
+        e(Command::NewAgent, "New session", icon::BOT, &["Ctrl", "Shift", "N"][..]),
+        e(Command::Search, "Search sessions and files…", icon::SEARCH, &["Ctrl", "K"][..]),
+        e(Command::NewAgentIn, "New session in folder…", icon::OPEN_FOLDER, &[][..]),
+        e(Command::NewIncognitoAgent, "New incognito session (no memory)", icon::HIDE, &[][..]),
         e(Command::NewShell, "New terminal", icon::TERMINAL, &["Ctrl", "Shift", "T"][..]),
         e(Command::NewShellIn, "New terminal in folder…", icon::OPEN_FOLDER, &[][..]),
         e(Command::Resume, "Resume a past Copilot session…", icon::HISTORY, &[][..]),
@@ -89,7 +92,7 @@ fn commands(memory_on: bool) -> Vec<Entry> {
         e(Command::Layout(LayoutMode::Rows), "Layout: rows", icon::TILES, &[][..]),
         e(Command::ToggleSide, "Toggle side panel", icon::DOCK, &["Ctrl", "Shift", "B"][..]),
         e(Command::Side(SidePanel::Missions), "Show missions", icon::LIGHTBULB, &[][..]),
-        e(Command::Side(SidePanel::Sessions), "Show sessions & activity", icon::HISTORY, &[][..]),
+        e(Command::Side(SidePanel::Sessions), "Show sessions", icon::HISTORY, &["Ctrl", "Shift", "H"][..]),
         e(Command::Side(SidePanel::Memory), "Show memory", icon::MEMORY, &["Ctrl", "Shift", "M"][..]),
         e(Command::ReviewMemories, "Review memory suggestions", icon::MEMORY, &[][..]),
         e(Command::ToggleMemory, if memory_on { "Turn memory off" } else { "Turn memory on" }, icon::MEMORY, &[][..]),
@@ -103,6 +106,7 @@ fn commands(memory_on: bool) -> Vec<Entry> {
         e(Command::ToggleReasoning, "Toggle agent reasoning", icon::BRAIN, &[][..]),
         e(Command::TogglePerf, "Toggle performance stats", icon::BAR_CHART, &[][..]),
         e(Command::OpenConfig, "Open config folder", icon::FOLDER, &[][..]),
+        e(Command::Shortcuts, "Keyboard shortcuts", icon::INFO, &["Ctrl", "/"][..]),
     ];
     for t in ThemeId::ALL {
         v.push(Entry { cmd: Command::Theme(t), title: format!("Theme: {}", t.name()), detail: String::new(), icon: icon::SETTINGS, keys: &[] });
