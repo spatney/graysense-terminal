@@ -1,0 +1,47 @@
+[package]
+name = "graysense"
+version = "0.1.0"
+edition = "2024"
+description = "Graysense - a fast, flat, modern terminal for GitHub Copilot agents, built on the Copilot SDK"
+license = "MIT"
+default-run = "graysense"
+
+[features]
+default = []
+# Embed the Copilot CLI runtime in the binary (portable build, ~150 MB larger).
+bundled = ["github-copilot-sdk/bundled-cli"]
+
+[dependencies]
+eframe = "0.37"
+alacritty_terminal = "0.26"
+github-copilot-sdk = { version = "=1.0.31", default-features = false, features = ["runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+rfd = "0.15"
+pulldown-cmark = { version = "0.13", default-features = false }
+arboard = { version = "3", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+parking_lot = "0.12"
+anyhow = "1"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wry = "0.57"
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
