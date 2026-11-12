@@ -244,29 +244,14 @@ impl SessionsPanel {
         let right_w = if hovered { 30.0 } else { p.layout_no_wrap(row.when.clone(), ui_font(11.0), theme.text_faint).size().x + 12.0 + if row.pinned { 16.0 } else { 0.0 } + if row.cli { 28.0 } else { 0.0 } };
         let tg = kit::elided(p, &row.title, ui_font(12.5), if hovered { theme.text } else { theme.text_dim }, rect.width() - right_w - 18.0);
         p.galley(pos2(rect.left() + 10.0, rect.center().y - tg.size().y / 2.0), tg, theme.text);
-        if hovered {
-            let mresp = ui.interact(menu_rect, menu_id, Sense::click()).on_hover_text("More");
-            mresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("More actions for {}", row.title)));
+        // The ⋯ button only shows on hover, but always exists so keyboards and screen readers
+        // can reach it (a mouse over its spot already counts as hovering the row).
+        let mresp = ui.interact(menu_rect, menu_id, Sense::click()).on_hover_text("More");
+        mresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("More actions for {}", row.title)));
+        if hovered || mresp.has_focus() {
             kit::paint_icon_button(ui, menu_rect, &mresp, icon::MORE, theme, menu_open);
-            egui::Popup::menu(&mresp).width(180.0).show(|ui| {
-                if ui.button(format!("{}   Rename", icon::EDIT)).clicked() {
-                    self.renaming = Some((row.id.clone(), row.title.clone()));
-                    ui.close();
-                }
-                if ui.button(format!("{}   {}", icon::PIN, if row.pinned { "Unpin" } else { "Pin" })).clicked() {
-                    out.push(SessionsAction::Pin(row.id.clone(), !row.pinned));
-                    ui.close();
-                }
-                if ui.button(format!("{}   Open folder", icon::FOLDER)).clicked() {
-                    out.push(SessionsAction::Reveal(row.id.clone()));
-                    ui.close();
-                }
-                if ui.button(RichText::new(format!("{}   Delete…", icon::DELETE)).color(theme.err)).clicked() {
-                    self.confirm_delete = Some(row.id.clone());
-                    ui.close();
-                }
-            });
         } else {
+            let p = ui.painter();
             let mut x = rect.right() - 8.0;
             let wr = p.text(pos2(x, rect.center().y), Align2::RIGHT_CENTER, &row.when, ui_font(11.0), theme.text_faint);
             x = wr.left() - 6.0;
@@ -278,6 +263,24 @@ impl SessionsPanel {
                 p.text(pos2(x, rect.center().y), Align2::RIGHT_CENTER, "CLI", semibold(9.5), theme.text_faint);
             }
         }
+        egui::Popup::menu(&mresp).width(180.0).show(|ui| {
+            if ui.button(format!("{}   Rename", icon::EDIT)).clicked() {
+                self.renaming = Some((row.id.clone(), row.title.clone()));
+                ui.close();
+            }
+            if ui.button(format!("{}   {}", icon::PIN, if row.pinned { "Unpin" } else { "Pin" })).clicked() {
+                out.push(SessionsAction::Pin(row.id.clone(), !row.pinned));
+                ui.close();
+            }
+            if ui.button(format!("{}   Open folder", icon::FOLDER)).clicked() {
+                out.push(SessionsAction::Reveal(row.id.clone()));
+                ui.close();
+            }
+            if ui.button(RichText::new(format!("{}   Delete…", icon::DELETE)).color(theme.err)).clicked() {
+                self.confirm_delete = Some(row.id.clone());
+                ui.close();
+            }
+        });
         if resp.clicked() {
             out.push(SessionsAction::Resume(row.id.clone()));
         }

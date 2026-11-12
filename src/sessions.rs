@@ -170,6 +170,17 @@ pub fn is_under(path: &Path, root: &Path) -> bool {
     !r.is_empty() && (p == r || p.starts_with(&format!("{r}\\")))
 }
 
+/// How a working folder reads in the UI: "Sessions › 2026-11-12 Fix login" for session folders,
+/// otherwise the path with the home folder shortened to "~".
+pub fn display_path(path: &Path, root: &Path) -> String {
+    if is_under(path, root) {
+        let rel = path.to_string_lossy().chars().skip(root.to_string_lossy().trim_end_matches(['\\', '/']).chars().count()).collect::<String>();
+        let rel = rel.trim_start_matches(['\\', '/']);
+        return if rel.is_empty() { "Sessions".to_owned() } else { format!("Sessions › {}", rel.replace(['\\', '/'], " › ")) };
+    }
+    crate::settings::short_path(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +203,8 @@ mod tests {
         assert!(name.ends_with(" Fix login auth bug"), "{name}");
         assert!(b.file_name().unwrap().to_string_lossy().ends_with("(2)"));
         assert!(is_under(&a, &root) && !is_under(&root.with_extension("x"), &root));
+        assert_eq!(display_path(&a.join("src"), &root), format!("Sessions › {name} › src"));
+        assert_eq!(display_path(&root, &root), "Sessions");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

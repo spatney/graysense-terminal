@@ -118,10 +118,10 @@ fn human_size(n: u64) -> String {
 }
 
 /// The Files tab. `changed` holds paths the agent created or edited (marked with a dot).
-pub fn files_ui(ui: &mut Ui, state: &mut FilesState, root: &Path, changed: &[String], theme: &Theme) -> Option<FileAction> {
+pub fn files_ui(ui: &mut Ui, state: &mut FilesState, root: &Path, sessions_root: &Path, changed: &[String], theme: &Theme) -> Option<FileAction> {
     let mut action = None;
     ui.horizontal(|ui| {
-        let g = kit::elided(ui.painter(), &crate::settings::short_path(root), ui_font(11.5), theme.text_faint, ui.available_width() - 70.0);
+        let g = kit::elided(ui.painter(), &crate::sessions::display_path(root, sessions_root), ui_font(11.5), theme.text_faint, ui.available_width() - 70.0);
         let (r, resp) = ui.allocate_exact_size(vec2(g.size().x, 20.0), Sense::hover());
         ui.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, theme.text_faint);
         resp.on_hover_text(root.display().to_string());

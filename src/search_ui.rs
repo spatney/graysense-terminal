@@ -57,12 +57,7 @@ impl SearchUi {
         let q = self.query.trim().to_owned();
         let fresh = self.cache.as_ref().is_some_and(|(cq, cs, cg, _)| *cq == q && *cs == self.scope && *cg == generation);
         if !fresh {
-            let want = |h: &Hit| match (self.scope, &index.doc(h).kind) {
-                (Scope::All, _) => true,
-                (Scope::Sessions, DocKind::Session(_)) => true,
-                (Scope::Files, DocKind::File(_)) => true,
-                _ => false,
-            };
+            let want = |h: &Hit| matches!((self.scope, &index.doc(h).kind), (Scope::All, _) | (Scope::Sessions, DocKind::Session(_)) | (Scope::Files, DocKind::File(_)));
             let hits: Vec<Hit> = (if q.is_empty() { index.recent(200) } else { index.search(&q, 200) }).into_iter().filter(want).take(60).collect();
             self.cache = Some((q, self.scope, generation, hits));
         }

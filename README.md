@@ -8,8 +8,29 @@ instead of a TUI inside a terminal.
 
 ## Highlights
 
+**Sessions**
+- Every new session gets its own folder, named after your first message, under a sessions folder
+  you choose (`~\Graysense\Sessions` by default; Settings → Sessions, or ask an agent). Want to
+  work in an existing project instead? Use *New session in folder…* or the folder menu.
+- A sessions sidebar (Ctrl+Shift+H) like a chat app's: what's open now, pinned sessions, then
+  everything by date (Today, Yesterday, Previous 7 days…). Filter by name, rename, pin, open the
+  folder, or delete. Sessions started in the Copilot CLI are listed too.
+- **Search everything** (Ctrl+K): session names and conversations, and the names and contents of
+  every file in your sessions folder, with highlighted matches, snippets and line numbers. Open a
+  result, show it in File Explorer, or attach a file to the focused agent.
+- Each agent has a **Files** tab showing its folder (files it changed are marked), and its header
+  folder menu opens the folder in File Explorer or VS Code, or starts a terminal or session there.
+
+**Ask agents to set things up**
+- Everything you can configure in Graysense, agents can configure for you: *“switch to the light
+  theme”*, *“make new sessions go in D:\Work”*, *“add the GitHub MCP server”*, *“install the
+  … plugin”*. Agents use `graysense_settings`, `graysense_mcp_servers` and `graysense_plugins`.
+  Appearance changes apply right away; anything else shows the exact change and asks first.
+
 **Native Copilot agents**
 - Streaming markdown replies (code blocks with copy, tables, task lists, links), collapsible reasoning.
+- Hover a message to copy it, edit and resend your own, or try the last reply again. Scrolled up?
+  A button takes you back to the latest.
 - Compact tool rows with live progress; click to expand arguments and output.
 - Inline approvals — *Allow*, *Allow for session*, *Deny* (with feedback) — showing the exact
   command, diff, path or URL. A ⚡ toggle per agent switches to auto-approve.
@@ -37,8 +58,9 @@ instead of a TUI inside a terminal.
 - Drop files on a terminal to paste their (quoted) paths.
 
 **Mission board**
-- Capture ideas (`title -- notes`), launch one as a new agent, or drag it onto a running agent to
-  delegate. Missions track their agent: active → ready for review → done.
+- Capture ideas (`title -- notes`), launch one as a new agent, or drag its card onto a running
+  agent to delegate; double-click a card to edit it. Missions track their agent: active → ready for
+  review → done.
 - Agents can add missions themselves (`graysense_add_mission`) and send you notifications
   (`graysense_notify`).
 
@@ -54,7 +76,8 @@ instead of a TUI inside a terminal.
 
 **Workspace**
 - Tile any number of agent and terminal bays: grid, focus + stack, columns, rows; maximize any bay.
-- Command palette (Ctrl+Shift+P) for everything, including past sessions and recent folders.
+- Command palette (Ctrl+Shift+P) for everything, and every shortcut on one sheet (Ctrl+/).
+- A start page with your recent sessions; new terminals open in the focused session's folder.
 - Bays and agent sessions are restored on launch; past sessions resume in their original folder.
 - Toasts and taskbar flashing when an agent needs you or finishes in the background.
 - Four flat themes — Graphite, Carbon, Slate and Paper (light) — and Windows 11 rounded corners.
@@ -130,9 +153,13 @@ target\release\graysense.exe [DIR] [--agent ["PROMPT"]] [--shell] [--no-restore]
 
 | Keys | Action |
 | --- | --- |
+| Ctrl+K, Ctrl+Shift+F | Search sessions and files |
 | Ctrl+Shift+P, F1 | Command palette |
-| Ctrl+Shift+N | New Copilot agent |
-| Ctrl+Shift+T | New terminal |
+| Ctrl+/ | All keyboard shortcuts |
+| Ctrl+Shift+N | New session |
+| Ctrl+Shift+T | New terminal (in the focused session's folder) |
+| Ctrl+Shift+H | Sessions sidebar |
+| Ctrl+Shift+M | Memory panel |
 | Ctrl+Shift+I | Capture an idea |
 | Ctrl+Shift+W | Close the focused bay |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous bay |
@@ -140,11 +167,11 @@ target\release\graysense.exe [DIR] [--agent ["PROMPT"]] [--shell] [--no-restore]
 | Ctrl+Shift+Enter | Maximize / restore the focused bay |
 | Ctrl+Shift+L | Cycle layout |
 | Ctrl+Shift+B | Toggle the side panel |
-| Ctrl+Shift+M | Memory panel |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Terminal font size |
 
 In an agent's composer: **Enter** sends, **Shift+Enter** adds a line, **Esc** stops the agent,
-**↑** recalls previous prompts, **/** opens commands and **Tab** completes them.
+**↑** recalls previous prompts, **/** opens commands and **Tab** completes them. While a terminal has
+focus, Ctrl+K and Ctrl+/ go to the shell.
 
 ## How it works
 
@@ -157,14 +184,19 @@ src/
                      handlers, MCP / plugin / MCP Apps / model RPCs, Graysense tools
     mod.rs           session events → transcript view model
     view.rs          agent bay UI: header, virtualized transcript, cards, composer, dock
+    files.rs         the dock's Files tab
     markdown.rs      markdown renderer
     forms.rs         JSON Schema → native form
   term/              PTY terminal: ConPTY + alacritty_terminal, renderer, input, box drawing
   canvas.rs          native canvas provider (checklist, table, dashboard, document)
   mcp_apps.rs        MCP Apps host: WebView2 (wry) views + JSON-RPC bridge
+  sessions.rs        session folders, titles and the session index
+  search.rs          search index over session conversations and files (background-built)
+  search_ui.rs       the Ctrl+K search dialog
   missions.rs        mission board
   memory.rs          memory store: ranking, review policy, curator prompt and parsing
-  control/           MCP server, plugin and memory panels
+  settings.rs        settings, including the schema agents read and change
+  control/           sessions, MCP server, plugin and memory panels
   palette.rs         command palette          layout.rs   bay tiling
   theme.rs, kit.rs   flat design system       win.rs      Windows window polish
 ```
@@ -175,11 +207,16 @@ that owns the client and sessions and talks to the UI over channels; interactive
 
 ## Files
 
+New sessions' folders live in your sessions folder (`~\Graysense\Sessions` unless you change it).
 Graysense keeps its own state in `%APPDATA%\Graysense`:
-`settings.json`, `workspace.json`, `missions.json`, `memory.json` and `graysense.log`
-(set `GRAYSENSE_LOG`, e.g. `debug`, to change the log filter).
-MCP servers and plugins are managed through Copilot's own configuration in `~/.copilot`, so they
-are shared with the Copilot CLI.
+`settings.json`, `workspace.json`, `sessions.json` (session names, pins and folders),
+`missions.json`, `memory.json`, the `search` cache and `graysense.log`
+(set `GRAYSENSE_LOG`, e.g. `debug`, to change the log filter; set `GRAYSENSE_CONFIG_DIR` to run
+with a separate profile, e.g. for testing).
+Conversations themselves are stored by the Copilot runtime in `~/.copilot/session-state`, and MCP
+servers and plugins are managed through Copilot's own configuration in `~/.copilot`, so all of
+these are shared with the Copilot CLI. Deleting a session in Graysense removes its conversation;
+the files in its folder stay.
 
 ## Troubleshooting
 

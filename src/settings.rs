@@ -334,19 +334,45 @@ pub fn which(exe: &str) -> Option<PathBuf> {
         .find(|p| p.is_file() || std::fs::symlink_metadata(p).is_ok())
 }
 
+/// `path` with the home folder shortened to "~" (e.g. "~\code\app").
 pub fn short_path(path: &Path) -> String {
-    let full = path.display().to_string();
-    if let Some(home) = dirs::home_dir() {
-        let h = home.display().to_string();
-        if full.len() >= h.len() && full[..h.len()].eq_ignore_ascii_case(&h) {
-            return format!("~{}", &full[h.len()..]);
+    shorten_home(path, dirs::home_dir().as_deref())
+}
+
+fn shorten_home(path: &Path, home: Option<&Path>) -> String {
+    let path = path.to_string_lossy().replace('/', "\\");
+    if let Some(home) = home {
+        let home = home.to_string_lossy().replace('/', "\\");
+        let home = home.trim_end_matches('\\');
+        // Only at a folder boundary ("C:\Users\Meg" isn't inside "C:\Users\Me"), and `get`
+        // keeps the cut on a char boundary.
+        if !home.is_empty()
+            && let Some(rest) = path.get(home.len()..)
+            && path[..home.len()].eq_ignore_ascii_case(home)
+            && (rest.is_empty() || rest.starts_with('\\'))
+        {
+            return format!("~{rest}");
         }
     }
-    full
+    path
 }
 
 pub fn dir_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_is_shortened_only_at_a_folder_boundary() {
+        let home = Some(Path::new(r"C:\Users\Me"));
+        assert_eq!(shorten_home(Path::new(r"c:\users\me\Graysense\Sessions\x"), home), r"~\Graysense\Sessions\x");
+        assert_eq!(shorten_home(Path::new("C:/Users/Me"), home), "~");
+        assert_eq!(shorten_home(Path::new(r"C:\Users\Meg\x"), home), r"C:\Users\Meg\x");
+        assert_eq!(shorten_home(Path::new(r"C:\Users\Mé\x"), home), r"C:\Users\Mé\x");
+    }
 }

@@ -71,10 +71,9 @@ pub struct Doc {
     pub kind: DocKind,
     /// Session title, or file name.
     pub title: String,
-    /// Files: parent path relative to the sessions root, using '\' (e.g. "2026-11-12 Fix login
-    /// bug\src"), "" for files directly in the root.
-    /// Sessions: the folder's display path with the home dir shortened to "~" (e.g.
-    /// "~\Graysense\Sessions\2026-11-12 Fix login bug"), or "" if unknown.
+    /// Where it lives, as the rest of the UI shows folders: "Sessions › 2026-11-12 Fix login
+    /// bug › src" inside the sessions folder, otherwise the path with home shortened to "~".
+    /// "" for sessions whose folder is unknown.
     pub location: String,
     /// Unix seconds.
     pub modified: i64,
@@ -108,8 +107,6 @@ pub struct Index {
 pub struct Hit {
     /// Index into `Index::docs`.
     pub doc: usize,
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub score: f32,
     /// One-line excerpt around the best match; "…" at either end when cut. Empty when there is
     /// nothing to show.
     pub snippet: String,
@@ -140,7 +137,6 @@ impl Index {
         cache_dir: &Path,
     ) -> Index {
         let started = Instant::now();
-        let home = dirs::home_dir();
         let cache_path = cache_dir.join("transcripts.json");
         let mut cache = TranscriptCache::load(&cache_path);
         let mut sessions: Vec<&SessionSource> = sessions.iter().collect();
@@ -156,7 +152,7 @@ impl Index {
                 let location = s
                     .folder
                     .as_deref()
-                    .map(|f| display_path(f, home.as_deref()))
+                    .map(|f| crate::sessions::display_path(f, sessions_root))
                     .unwrap_or_default();
                 Doc::new(
                     DocKind::Session(s.id.clone()),
@@ -200,7 +196,7 @@ impl Index {
         ranked
             .into_iter()
             .take(limit)
-            .map(|(i, score)| self.hit(i, score, &query))
+            .map(|(i, _)| self.hit(i, &query))
             .collect()
     }
 
@@ -213,7 +209,6 @@ impl Index {
             .take(limit)
             .map(|doc| Hit {
                 doc,
-                score: 0.0,
                 snippet: lead(&self.docs[doc].body),
                 snippet_ranges: Vec::new(),
                 title_ranges: Vec::new(),
@@ -227,7 +222,7 @@ impl Index {
         &self.docs[hit.doc]
     }
 
-    fn hit(&self, doc: usize, score: f32, query: &Query) -> Hit {
+    fn hit(&self, doc: usize, query: &Query) -> Hit {
         let d = &self.docs[doc];
         let first =
             |t: &String| find_at(d.body_lc.as_bytes(), t.as_bytes(), 0).map(|i| (i, t.len()));
@@ -246,7 +241,6 @@ impl Index {
             .map(|(at, _)| 1 + d.body[..at].matches('\n').count());
         Hit {
             doc,
-            score,
             snippet_ranges: term_ranges(&snippet.to_ascii_lowercase(), &query.terms),
             snippet,
             title_ranges: term_ranges(&d.title_lc, &query.terms),
@@ -605,7 +599,7 @@ fn read_transcript(log: &Path) -> Option<String> {
 /// dirs. Bodies take at most `text_budget` bytes together.
 fn file_docs(root: &Path, mut text_budget: usize) -> Vec<Doc> {
     let mut docs = Vec::new();
-    let mut queue = VecDeque::from([(root.to_path_buf(), String::new(), 0)]);
+    let mut queue = VecDeque::from([(root.to_path_buf(), "Sessions".to_owned(), 0)]);
     while let Some((dir, location, depth)) = queue.pop_front() {
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
@@ -626,12 +620,7 @@ fn file_docs(root: &Path, mut text_budget: usize) -> Vec<Doc> {
                 if depth + 1 < MAX_DEPTH
                     && !SKIP_DIRS.split(' ').any(|d| d.eq_ignore_ascii_case(&name))
                 {
-                    let sub = if location.is_empty() {
-                        name
-                    } else {
-                        format!("{location}\\{name}")
-                    };
-                    queue.push_back((path, sub, depth + 1));
+                    queue.push_back((path, format!("{location} › {name}"), depth + 1));
                 }
                 continue;
             }
@@ -693,23 +682,6 @@ fn utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
     char::decode_utf16(units)
         .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect()
-}
-
-/// `path` with '\' separators and the home dir shortened to "~".
-fn display_path(path: &Path, home: Option<&Path>) -> String {
-    let path = path.to_string_lossy().replace('/', "\\");
-    if let Some(home) = home {
-        let home = home.to_string_lossy().replace('/', "\\");
-        let home = home.trim_end_matches('\\');
-        if let Some(rest) = path.get(home.len()..)
-            && !home.is_empty()
-            && path[..home.len()].eq_ignore_ascii_case(home)
-            && (rest.is_empty() || rest.starts_with('\\'))
-        {
-            return format!("~{rest}");
-        }
-    }
-    path
 }
 
 fn modified_secs(meta: &fs::Metadata) -> i64 {
@@ -951,7 +923,7 @@ mod tests {
         assert_eq!(doc.kind, DocKind::File(main_rs));
         assert_eq!(
             (doc.title.as_str(), doc.location.as_str()),
-            ("main.rs", "2026-11-12 Fix login bug\\src")
+            ("main.rs", "Sessions › 2026-11-12 Fix login bug › src")
         );
         assert_eq!(hit.line, Some(2));
         let hit = &idx.search("blob", 10)[0];
@@ -959,7 +931,7 @@ mod tests {
         assert_eq!(marked("blob.dat", &hit.title_ranges), ["blob"]);
         assert_eq!(idx.doc(&idx.search("widetext", 10)[0]).body(), "widetext");
         let doc = idx.doc(&idx.search("rootnote", 10)[0]);
-        assert_eq!((doc.location.as_str(), doc.body()), ("", "rootnote"));
+        assert_eq!((doc.location.as_str(), doc.body()), ("Sessions", "rootnote"));
     }
 
     #[test]
@@ -1068,20 +1040,6 @@ mod tests {
         assert_eq!(find_at(b"abc", b"abcd", 0), None);
         assert_eq!(find_at(b"abc", b"c", 9), None);
         assert_eq!(find_at(b"abc", b"", 0), None);
-    }
-
-    #[test]
-    fn display_path_shortens_home() {
-        let home = Some(Path::new(r"C:\Users\Me"));
-        assert_eq!(
-            display_path(Path::new(r"c:\users\me\Graysense\Sessions\x"), home),
-            r"~\Graysense\Sessions\x"
-        );
-        assert_eq!(display_path(Path::new("C:/Users/Me"), home), "~");
-        assert_eq!(
-            display_path(Path::new(r"C:\Users\Meg\x"), home),
-            r"C:\Users\Meg\x"
-        );
     }
 
     #[test]

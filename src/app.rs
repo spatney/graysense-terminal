@@ -766,8 +766,10 @@ impl GraysenseApp {
                 let id = self.alloc_bay();
                 self.bays.push(Bay { id, kind: BayKind::Shell(Box::new(pane)) });
                 self.focus(self.bays.len() - 1);
-                self.settings.push_recent_dir(&cwd);
-                self.settings_dirty = true;
+                if !sessions::is_under(&cwd, &self.settings.sessions_root()) {
+                    self.settings.push_recent_dir(&cwd);
+                    self.settings_dirty = true;
+                }
             }
             Err(e) => self.toast(Level::Error, format!("Couldn't start shell: {e}")),
         }
@@ -1006,7 +1008,8 @@ impl GraysenseApp {
 
     /// Every shortcut on one sheet (Ctrl+/), like chat apps and editors offer.
     fn shortcuts_overlay(&mut self, ctx: &egui::Context) {
-        const GROUPS: [(&str, &[(&[&str], &str)]); 4] = [
+        type Group = (&'static str, &'static [(&'static [&'static str], &'static str)]);
+        const GROUPS: [Group; 4] = [
             (
                 "General",
                 &[
@@ -1816,7 +1819,7 @@ impl GraysenseApp {
             if let Some(b) = self.bays.get(self.focused) {
                 let info = match &b.kind {
                     BayKind::Agent(v) => {
-                        let mut s = format!("{}  ·  {}", v.model.clone().unwrap_or_else(|| "Default model".into()), settings::short_path(&v.cwd));
+                        let mut s = format!("{}  ·  {}", v.model.clone().unwrap_or_else(|| "Default model".into()), sessions::display_path(&v.cwd, &self.settings.sessions_root()));
                         if v.tokens_in + v.tokens_out > 0 {
                             s.push_str(&format!("  ·  {} in / {} out", human(v.tokens_in), human(v.tokens_out)));
                         }
@@ -1825,7 +1828,7 @@ impl GraysenseApp {
                         }
                         s
                     }
-                    BayKind::Shell(pane) => format!("{}×{}  ·  {}", pane.cols, pane.rows, settings::short_path(&pane.cwd)),
+                    BayKind::Shell(pane) => format!("{}×{}  ·  {}", pane.cols, pane.rows, sessions::display_path(&pane.cwd, &self.settings.sessions_root())),
                 };
                 x = p.text(pos2(x, cy), Align2::LEFT_CENTER, info, ui_font(11.5), theme.text_faint).right() + 16.0;
             }
@@ -2379,6 +2382,7 @@ impl GraysenseApp {
 
     fn bays_ui(&mut self, ui: &mut Ui, t: f32, dt: f32) -> Vec<(u64, Rect)> {
         let ctx = ui.ctx().clone();
+        let sessions_root = self.settings.sessions_root();
         let area = ui.max_rect().shrink(8.0);
         let files_hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
@@ -2437,7 +2441,7 @@ impl GraysenseApp {
                         if focus_request && focused {
                             view.focus_composer = true;
                         }
-                        let cx = AgentCtx { theme: &theme, t, models: &models, show_reasoning: self.settings.show_reasoning, focused, maximized: self.maximized };
+                        let cx = AgentCtx { theme: &theme, t, models: &models, show_reasoning: self.settings.show_reasoning, focused, maximized: self.maximized, sessions_root: &sessions_root };
                         let mut out = Vec::new();
                         agent_view::header(ui, view, header, &cx, &mut out);
                         if let Some(p) = agent_view::body(ui, view, body, &cx, &mut out) {
@@ -2450,7 +2454,7 @@ impl GraysenseApp {
                         if focus_request && focused {
                             ui.memory_mut(|m| m.request_focus(term_id));
                         }
-                        shell_header(ui, pane, header, &theme, focused, self.maximized, i, &mut actions);
+                        shell_header(ui, pane, header, &theme, focused, self.maximized, i, &sessions_root, &mut actions);
                         let tacts = term_view::show(ui, pane, body, term_id, &metrics, &theme, self.settings.smooth_cursor, dt);
                         actions.extend(tacts.into_iter().map(|a| BayAction::Term(i, a)));
                     }
@@ -2852,7 +2856,7 @@ fn shell_quote(path: &std::path::Path) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shell_header(ui: &mut Ui, pane: &TermPane, rect: Rect, theme: &Theme, focused: bool, maximized: bool, index: usize, out: &mut Vec<BayAction>) {
+fn shell_header(ui: &mut Ui, pane: &TermPane, rect: Rect, theme: &Theme, focused: bool, maximized: bool, index: usize, sessions_root: &std::path::Path, out: &mut Vec<BayAction>) {
     let p = ui.painter_at(rect);
     p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme.border));
     let cy = rect.center().y;
@@ -2862,7 +2866,7 @@ fn shell_header(ui: &mut Ui, pane: &TermPane, rect: Rect, theme: &Theme, focused
     let title = kit::elided(&p, &pane.title, semibold(13.0), theme.text, avail.min(avail * 0.7 + 40.0));
     let tw = title.size().x;
     p.galley(pos2(rect.left() + 32.0, cy - title.size().y / 2.0), title, theme.text);
-    let status = if pane.exited.is_some() { "exited".to_owned() } else { settings::short_path(&pane.cwd) };
+    let status = if pane.exited.is_some() { "exited".to_owned() } else { sessions::display_path(&pane.cwd, sessions_root) };
     let sx = rect.left() + 32.0 + tw + 10.0;
     if spark.left() - 12.0 - sx > 50.0 {
         let g = kit::elided(&p, &status, ui_font(11.5), theme.text_faint, spark.left() - 12.0 - sx);

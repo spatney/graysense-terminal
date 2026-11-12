@@ -56,6 +56,8 @@ pub struct AgentCtx<'a> {
     pub show_reasoning: bool,
     pub focused: bool,
     pub maximized: bool,
+    /// Where session folders live (paths inside it are shown as "Sessions › …").
+    pub sessions_root: &'a std::path::Path,
 }
 
 pub fn status_color(status: &Status, theme: &Theme) -> Color32 {
@@ -275,7 +277,7 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
             p.galley(pos2(lx, cy - g.size().y / 2.0), g, theme.text_faint);
         } else {
             // The folder is a menu: open it in Explorer or VS Code, start a terminal or agent there.
-            let cwd = crate::settings::short_path(&view.cwd);
+            let cwd = crate::sessions::display_path(&view.cwd, cx.sessions_root);
             let g = kit::elided(&p, &cwd, ui_font(11.5), theme.text_faint, cwd_room - 8.0);
             let prect = Rect::from_min_size(pos2(lx - 4.0, cy - 11.0), vec2(g.size().x + 8.0, 22.0));
             let presp = ui.interact(prect, ui.scope_id().with("path"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(view.cwd.display().to_string());
@@ -289,7 +291,7 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
                     (icon::FOLDER, "Open in File Explorer", FolderAction::Reveal),
                     (icon::CODE, "Open in VS Code", FolderAction::VsCode),
                     (icon::TERMINAL, "New terminal here", FolderAction::Terminal),
-                    (icon::BOT, "New agent in this folder", FolderAction::NewAgent),
+                    (icon::BOT, "New session in this folder", FolderAction::NewAgent),
                     (icon::COPY, "Copy path", FolderAction::CopyPath),
                 ];
                 for (glyph, label, action) in items {
@@ -374,7 +376,7 @@ pub fn body(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out: &
                 let r = ui.available_rect_before_wrap();
                 ui.allocate_rect(r, Sense::hover());
                 app_rect = Some((app.view, r));
-            } else if has_folder && let Some(a) = super::files::files_ui(ui, &mut view.files_state, &view.cwd, &view.files, theme) {
+            } else if has_folder && let Some(a) = super::files::files_ui(ui, &mut view.files_state, &view.cwd, cx.sessions_root, &view.files, theme) {
                 out.push(AgentAction::File(a));
             }
         });
@@ -488,7 +490,7 @@ fn empty_state(ui: &mut Ui, view: &AgentView, cx: &AgentCtx, out: &mut Vec<Agent
     let sub = if view.deferred {
         format!("Gets its own folder in {}", crate::settings::short_path(&view.cwd))
     } else {
-        format!("Working in {}", crate::settings::short_path(&view.cwd))
+        format!("Working in {}", crate::sessions::display_path(&view.cwd, cx.sessions_root))
     };
     p.text(c + vec2(0.0, 25.0), Align2::CENTER_CENTER, sub, ui_font(12.5), theme.text_dim);
     if booting {
@@ -813,7 +815,9 @@ fn item_ui(ui: &mut Ui, view: &mut AgentView, i: usize, cx: &AgentCtx, out: &mut
             let pr = raw.get("promptRequest").cloned().unwrap_or_else(|| raw.get("permissionRequest").cloned().unwrap_or(Value::Null));
             let kind = pr.get("kind").and_then(|v| v.as_str()).unwrap_or("tool").to_owned();
             let intention = pr.get("intention").and_then(|v| v.as_str()).map(str::to_owned);
+            let graysense_tool = kind == "custom-tool" && pr.get("toolName").and_then(Value::as_str).is_some_and(|t| t.starts_with("graysense_"));
             let what = match kind.as_str() {
+                _ if graysense_tool => "Change Graysense",
                 "commands" => "Run a command",
                 "write" => "Edit a file",
                 "read" => "Read a file",

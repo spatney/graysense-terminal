@@ -268,8 +268,10 @@ impl MissionBoard {
         let mut action = None;
         // The card is its own drag handle. Its sense sits *below* the card's buttons (unlike
         // `dnd_drag_source`, which covers them), so the buttons stay clickable and a drag only
-        // starts once the pointer moves.
+        // starts once the pointer moves. Its text isn't selectable, so grabbing the title or notes
+        // picks the card up (and double-clicking them edits it) instead of selecting text.
         let inner = ui.scope_builder(egui::UiBuilder::new().id_salt(("mission-card", m.id)).sense(Sense::click_and_drag()), |ui| {
+            ui.style_mut().interaction.selectable_labels = false;
             Frame::new().fill(theme.surface2).stroke(Stroke::new(1.0, theme.border)).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_top(|ui| {
@@ -389,4 +391,107 @@ enum CardAction {
     Edit,
     Done,
     Board(BoardAction),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{self, ThemeId};
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, vec2};
+
+    /// Drives the board headlessly with real pointer events, so egui's own hit-testing decides
+    /// which widget gets a click or a drag.
+    struct Harness {
+        ctx: egui::Context,
+        board: MissionBoard,
+        theme: Theme,
+        actions: Vec<BoardAction>,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let ctx = egui::Context::default();
+            let theme = Theme::get(ThemeId::Graphite);
+            theme::install_fonts(&ctx);
+            theme::apply_style(&ctx, &theme);
+            ctx.enable_accesskit();
+            let mut board = MissionBoard { missions: Vec::new(), next_id: 1, dirty: false, capture: String::new(), editing: None, filter: Filter::Open };
+            board.add("Draft release notes", "Summarize this week's changes", false);
+            let mut h = Harness { ctx, board, theme, actions: Vec::new() };
+            h.frame(Vec::new());
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(420.0, 640.0))), events, ..Default::default() };
+            let (board, theme, actions) = (&mut self.board, &self.theme, &mut self.actions);
+            let mut out = self.ctx.run_ui(input, |ui| actions.extend(board.show(ui, theme, &|_| None)));
+            // No renderer here to upload the font atlas; egui asserts that deltas are handled.
+            out.textures_delta.clear();
+            out
+        }
+
+        /// Centre of the widget whose accessible name is `name`.
+        fn find(&mut self, name: &str) -> Pos2 {
+            let tree = self.frame(Vec::new()).platform_output.accesskit_update.expect("accesskit tree");
+            let r = tree.nodes.iter().find(|(_, n)| n.label().or(n.value()) == Some(name)).and_then(|(_, n)| n.bounds()).unwrap_or_else(|| panic!("no widget named {name:?}"));
+            Pos2::new(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32)
+        }
+
+        fn button(&mut self, pos: Pos2, pressed: bool) {
+            self.frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }]);
+        }
+
+        fn click(&mut self, pos: Pos2) {
+            self.frame(vec![Event::PointerMoved(pos)]);
+            self.button(pos, true);
+            self.button(pos, false);
+        }
+
+        /// Presses at `from` and moves down without releasing; true if a mission drag started.
+        fn drag(&mut self, from: Pos2) -> bool {
+            self.frame(vec![Event::PointerMoved(from)]);
+            self.button(from, true);
+            for i in 1..=5 {
+                self.frame(vec![Event::PointerMoved(from + vec2(4.0, 10.0 * i as f32))]);
+            }
+            egui::DragAndDrop::has_payload_of_type::<MissionDrag>(&self.ctx)
+        }
+    }
+
+    #[test]
+    fn card_buttons_take_clicks() {
+        let mut h = Harness::new();
+        let launch = h.find("Launch a new agent for this");
+        h.click(launch);
+        assert!(h.actions.iter().any(|a| matches!(a, BoardAction::Launch(1))));
+        let edit = h.find("Edit");
+        h.click(edit);
+        assert!(h.board.editing.is_some());
+
+        let mut h = Harness::new();
+        let done = h.find("Mark done");
+        h.click(done);
+        assert_eq!(h.board.missions[0].status, Status::Done);
+    }
+
+    #[test]
+    fn cards_drag_from_their_text() {
+        let mut h = Harness::new();
+        let title = h.find("Draft release notes");
+        assert!(h.drag(title), "dragging the title should pick the mission up");
+
+        let mut h = Harness::new();
+        let notes = h.find("Summarize this week's changes");
+        assert!(h.drag(notes), "dragging the notes should pick the mission up");
+    }
+
+    #[test]
+    fn double_clicking_a_card_edits_it() {
+        let mut h = Harness::new();
+        let title = h.find("Draft release notes");
+        h.click(title);
+        h.click(title);
+        assert!(h.board.editing.is_some());
+    }
 }

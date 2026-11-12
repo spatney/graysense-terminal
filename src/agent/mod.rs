@@ -337,11 +337,11 @@ pub fn tool_target(name: &str, args: &Value) -> Option<String> {
         "open_canvas" => args.get("input").and_then(|i| s(i, "title")).or_else(|| s(args, "instanceId")),
         "invoke_canvas_action" => s(args, "actionName"),
         "list_canvas_capabilities" => s(args, "canvasId"),
-        "graysense_settings" => match args.get("changes").and_then(|c| c.as_object()) {
-            Some(c) => Some(trunc(&c.keys().map(String::as_str).collect::<Vec<_>>().join(", "), 60)),
-            None => s(args, "action"),
+        "graysense_settings" => args.get("changes").and_then(|c| c.as_object()).map(|c| trunc(&c.keys().map(String::as_str).collect::<Vec<_>>().join(", "), 60)),
+        "graysense_mcp_servers" | "graysense_plugins" => match s(args, "action").as_deref() {
+            Some("list") | None => None,
+            _ => Some(trunc(&[s(args, "action"), s(args, "name").or_else(|| s(args, "source"))].into_iter().flatten().collect::<Vec<_>>().join(" "), 60)),
         },
-        "graysense_mcp_servers" | "graysense_plugins" => Some(trunc(&[s(args, "action"), s(args, "name").or_else(|| s(args, "source"))].into_iter().flatten().collect::<Vec<_>>().join(" "), 60)),
         _ => args
             .as_object()
             .and_then(|o| o.values().find_map(|v| v.as_str().map(|x| trunc(x, 48)))),
@@ -406,6 +406,16 @@ pub fn tool_verb(name: &str) -> String {
 pub fn tool_label(card: &ToolCard, target: Option<&str>) -> String {
     if card.name == "ask_user" {
         return if card.state == ToolState::Running { "Waiting for your answer".into() } else { "Asked you".into() };
+    }
+    if card.name == "graysense_settings" && card.args.get("action").and_then(|a| a.as_str()) != Some("set") {
+        return "Read Graysense settings".into();
+    }
+    if card.args.get("action").and_then(|a| a.as_str()) == Some("list") {
+        match card.name.as_str() {
+            "graysense_mcp_servers" => return "List MCP servers".into(),
+            "graysense_plugins" => return "List plugins".into(),
+            _ => {}
+        }
     }
     let meaningful = |s: &str| s.trim().chars().filter(|c| c.is_alphanumeric()).count() >= 3 && Some(s.trim()) != target;
     let pick = card.intention.as_deref().filter(|s| meaningful(s)).or(card.title.as_deref().filter(|s| meaningful(s)));
