@@ -27,13 +27,27 @@ signed in (`copilot login`).
   "Worked for 2m · 14 steps" when the turn is done.
 - Inline cards for **approvals** (*Allow*, *Allow for session*, *Deny* with feedback, showing the
   exact command, diff, path or URL), **questions**, **forms** and **plan reviews**.
-- **Ask / Plan / Autopilot** modes (Shift+Tab), a context meter, queued follow-ups while the agent
-  works, Esc to stop, ↑ for earlier messages, and slash commands (`/model`, `/effort`, `/mode`,
-  `/attach`, `/rename`, `/learn`, `/clear`, `/stop`, `/terminal`, `/new`).
+- **Settings > Agents > Approve all tool calls by default** lets new sessions run tools without
+  asking, including commands and file changes. Off by default; existing and resumed sessions
+  are unchanged. Each session still has its own approval toggle.
+- **Ask / Plan / Autopilot** modes (Shift+Tab), a context meter, Esc to stop, ↑ for earlier
+  messages, and slash commands (`/model`, `/effort`, `/mode`, `/attach`, `/rename`, `/learn`,
+  `/clear`, `/stop`, `/terminal`, `/new`).
+- **Steer the agent while it works**: Enter sends a message that Copilot reads at its next step,
+  without waiting for the turn to finish. Ctrl+Enter queues it for after the turn instead.
 - **A model picker with thinking levels**: models grouped into Powerful, Versatile and Fast, with
   Auto at the top, and how hard the model thinks (Auto, Low, Medium, High, Extra high, Max, as
   each model offers them). Change them mid-session, or make them what new sessions start with.
 - Attach files by dropping them on an agent, with the + button, or `/attach <path>`.
+  Type **@** in a message to autocomplete paths from the session folder (the default folder
+  before a session has its own folder). Use Up/Down and Tab/Enter to select, navigate folders,
+  or Esc to dismiss.
+  Absolute paths, `..`, `~`, and quoted paths with spaces work too. Selected files are attached
+  when you send; deleting a mention before sending removes it from the message's attachments.
+  **Paste an image** (Ctrl+V a screenshot or a copied PNG, JPEG, GIF or WebP picture) into the
+  message box to attach it to the next message; pasting on the home screen starts a session.
+  Pasted images are kept in `%APPDATA%\Graysense\pasted-images`; ones older than 30 days are
+  deleted the next time you paste.
 
 **Notes: a bucket for context you'll need later**
 - Save what happened — *"When Charles asked for the Rayfin logo, I sent him the dark version"* —

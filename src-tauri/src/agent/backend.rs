@@ -88,7 +88,8 @@ pub struct AgentMemory {
 pub enum Cmd {
     Connect,
     Create { bay: BayId, spec: AgentSpec },
-    Send { bay: BayId, text: String, files: Vec<PathBuf> },
+    /// `steer`: if the agent is mid-turn, it reads the message at its next step instead of after the turn.
+    Send { bay: BayId, text: String, files: Vec<PathBuf>, steer: bool },
     Abort { bay: BayId },
     SetModel { bay: BayId, model: String, effort: EffortChange },
     SetMode { bay: BayId, mode: Mode },
@@ -402,18 +403,22 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     });
                 }
                 if let Some(p) = prompt {
-                    backlog.push_back(Cmd::Send { bay, text: p, files });
+                    backlog.push_back(Cmd::Send { bay, text: p, files, steer: false });
                 }
                 sessions.insert(bay, session);
                 if let Some(cmds) = parked.remove(&bay) {
                     backlog.extend(cmds);
                 }
             }
-            Cmd::Send { bay, text, files } => {
+            Cmd::Send { bay, text, files, steer } => {
                 let s = sessions[&bay].clone();
                 let ui = ui.clone();
                 tokio::spawn(async move {
                     let mut opts = github_copilot_sdk::MessageOptions::new(text);
+                    if steer {
+                        // An idle session runs it as usual.
+                        opts = opts.with_mode(github_copilot_sdk::DeliveryMode::Immediate);
+                    }
                     if !files.is_empty() {
                         let attachments = files
                             .into_iter()

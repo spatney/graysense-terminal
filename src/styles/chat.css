@@ -1417,6 +1417,22 @@ button.file-chip:hover {
   font-size: 12px;
 }
 
+.file-mention-results {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.file-mention-heading,
+.file-mention-status {
+  padding: 6px 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.file-mention-status {
+  overflow-wrap: anywhere;
+}
+
 /* ------------------------------------------------------------------ hero (empty session) */
 
 .chat.fresh .chat-scroll {

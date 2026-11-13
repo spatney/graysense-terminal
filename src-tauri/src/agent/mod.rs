@@ -180,7 +180,7 @@ pub struct SubagentCard {
 
 pub enum Item {
     /// `took`: how long the agent worked on it, in ms (from the turn's first to its last event).
-    User { text: String, queued: bool, files: Vec<String>, took: Option<u64> },
+    User { text: String, files: Vec<String>, took: Option<u64> },
     Assistant { text: String, done: bool },
     Reasoning { text: String, done: bool },
     Tool(Box<ToolCard>),
@@ -208,6 +208,22 @@ impl Item {
             _ => false,
         }
     }
+}
+
+/// A message sent while the agent works on a turn: it joins the transcript when the agent reads it.
+#[derive(Clone)]
+pub struct QueuedMessage {
+    pub text: String,
+    pub files: Vec<String>,
+    /// Read at the agent's next step (steering the turn) rather than after the turn.
+    pub steer: bool,
+}
+
+/// A message sent from here whose `user.message` hasn't come back yet.
+struct Echo {
+    sent: String,
+    /// Not shown in the transcript yet (sent mid-turn).
+    queued: Option<QueuedMessage>,
 }
 
 /// A line for the global COMMS log.
@@ -255,7 +271,7 @@ pub struct AgentView {
     index: HashMap<String, usize>,
     intents: HashMap<String, String>,
     sub_by_agent: HashMap<String, usize>,
-    local_echo: VecDeque<String>,
+    local_echo: VecDeque<Echo>,
     pub seen: HashSet<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
@@ -473,20 +489,41 @@ impl AgentView {
     }
 
     pub fn echo_user_with(&mut self, text: &str, files: Vec<String>) {
-        self.echo_user_shown(text, text, files);
+        self.echo_user_shown(text, text, files, false);
     }
 
     /// Echo a prompt whose sent text carries context the bubble doesn't show (the runtime's
-    /// echo of `sent` is matched to it).
-    pub fn echo_user_shown(&mut self, shown: &str, sent: &str, files: Vec<String>) {
-        let queued = self.status.is_busy();
-        self.local_echo.push_back(sent.trim().to_owned());
-        self.push(Item::User { text: shown.to_owned(), queued, files, took: None });
-        if !self.status.is_busy() {
-            self.status = Status::Thinking;
-            self.busy_since = Some(Since::now());
-        }
+    /// echo of `sent` is matched to it). Sent mid-turn, it waits in [`Self::queued`] until the
+    /// agent reads it: at its next step if `steer`, else after the turn.
+    pub fn echo_user_shown(&mut self, shown: &str, sent: &str, files: Vec<String>, steer: bool) {
+        let mid_turn = matches!(self.status, Status::Thinking | Status::Streaming | Status::Tool(_) | Status::Waiting(_) | Status::Compacting);
+        let queued = if mid_turn {
+            Some(QueuedMessage { text: shown.to_owned(), files, steer })
+        } else {
+            self.push(Item::User { text: shown.to_owned(), files, took: None });
+            if !self.status.is_busy() {
+                self.status = Status::Thinking;
+                self.busy_since = Some(Since::now());
+            }
+            None
+        };
+        self.local_echo.push_back(Echo { sent: sent.trim().to_owned(), queued });
         self.sent_history.push(shown.to_owned());
+    }
+
+    /// Messages sent mid-turn that the agent hasn't read yet, oldest first.
+    pub fn queued(&self) -> impl Iterator<Item = &QueuedMessage> {
+        self.local_echo.iter().filter_map(|e| e.queued.as_ref())
+    }
+
+    /// Put the messages still waiting into the transcript, once the turn they waited on is over
+    /// (their echo is still matched, so they don't show twice if the agent reads them later).
+    pub fn show_queued(&mut self) {
+        for e in self.local_echo.iter_mut() {
+            if let Some(m) = e.queued.take() {
+                self.items.push(Item::User { text: m.text, files: m.files, took: None });
+            }
+        }
     }
 
     pub fn pending_prompts(&self) -> usize {
@@ -626,12 +663,10 @@ impl AgentView {
                 // Notes Graysense attached to a question aren't part of what the user wrote.
                 let content = crate::memory::split_included(&sent).0.to_owned();
                 self.turn_started = event_ms(ev);
-                if self.local_echo.front().is_some_and(|e| e == sent.trim()) {
-                    self.local_echo.pop_front();
-                    let shown = self.items.iter().rposition(|i| matches!(i, Item::User { text, .. } if text.trim() == content.trim()));
-                    let at = shown.or_else(|| self.items.iter().position(|i| matches!(i, Item::User { queued: true, .. })));
-                    if let Some(Item::User { queued, .. }) = at.and_then(|i| self.items.get_mut(i)) {
-                        *queued = false;
+                // Steered and queued messages can reach the agent in a different order than sent.
+                if let Some(at) = self.local_echo.iter().position(|e| e.sent == sent.trim()) {
+                    if let Some(m) = self.local_echo.remove(at).and_then(|e| e.queued) {
+                        self.push(Item::User { text: m.text, files: m.files, took: None });
                     }
                 } else {
                     let files = d
@@ -643,7 +678,7 @@ impl AgentView {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    self.push(Item::User { text: content.clone(), queued: false, files, took: None });
+                    self.push(Item::User { text: content.clone(), files, took: None });
                 }
                 fx.push(self.log(Level::Info, format!("You: {}", trunc(&content, 70))));
                 self.status = Status::Thinking;
@@ -652,7 +687,7 @@ impl AgentView {
             "assistant.turn_end" => {
                 // Every turn of the agent's loop moves the end of the work on the message forward.
                 if let (Some(t0), Some(t1)) = (self.turn_started, event_ms(ev))
-                    && let Some(Item::User { took, .. }) = self.items.iter_mut().rev().find(|i| matches!(i, Item::User { queued: false, .. }))
+                    && let Some(Item::User { took, .. }) = self.items.iter_mut().rev().find(|i| matches!(i, Item::User { .. }))
                 {
                     *took = Some(t1.saturating_sub(t0).max(0) as u64);
                 }
@@ -910,10 +945,11 @@ impl AgentView {
                         Item::Tool(card) if card.state == ToolState::Running => {
                             card.state = if aborted { ToolState::Failed } else { ToolState::Ok };
                         }
-                        Item::User { queued, .. } => *queued = false,
                         _ => {}
                     }
                 }
+                // Sent as the turn ended.
+                self.show_queued();
                 let was_busy = self.busy_since.take();
                 self.status = Status::Idle;
                 self.intent = None;
@@ -932,6 +968,7 @@ impl AgentView {
                 let msg = s(d, "message").unwrap_or_else(|| "unknown error".into());
                 self.notice(Level::Error, msg.clone());
                 fx.push(self.log(Level::Error, trunc(&msg, 80)));
+                self.show_queued();
                 self.status = Status::Error(msg);
                 self.busy_since = None;
             }
@@ -1037,7 +1074,7 @@ mod tests {
         let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
         v.status = Status::Idle;
         let sent = "What did I send Charles?\n\n<graysense_notes>\n- Sent Charles the logo\n</graysense_notes>";
-        v.echo_user_shown("What did I send Charles?", sent, Vec::new());
+        v.echo_user_shown("What did I send Charles?", sent, Vec::new(), false);
         v.apply(&ev("1", "user.message", json!({ "content": sent })));
         let users: Vec<&String> = v.items.iter().filter_map(|i| if let Item::User { text, .. } = i { Some(text) } else { None }).collect();
         assert_eq!(users, ["What did I send Charles?"]);
@@ -1045,5 +1082,60 @@ mod tests {
         let mut later = AgentView::new(2, std::env::temp_dir(), Mode::Interactive);
         later.apply(&ev("1", "user.message", json!({ "content": "What did I send Charles?\n\n<graysense_notes ids=\"4\">\n- (note) Sent Charles the logo\n</graysense_notes>" })));
         assert!(matches!(later.items.first(), Some(Item::User { text, .. }) if text == "What did I send Charles?"));
+    }
+
+    /// The transcript's messages and replies, in order.
+    fn said(v: &AgentView) -> Vec<&str> {
+        v.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::User { text, .. } => Some(text.as_str()),
+                Item::Assistant { .. } => Some("(reply)"),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An agent working on "Write tidy.py".
+    fn working() -> AgentView {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.status = Status::Idle;
+        v.echo_user_with("Write tidy.py", Vec::new());
+        v.apply(&ev("1", "user.message", json!({ "content": "Write tidy.py" })));
+        v
+    }
+
+    #[test]
+    fn a_message_steering_a_turn_shows_where_the_agent_reads_it() {
+        let mut v = working();
+        v.echo_user_shown("Use tabs", "Use tabs", Vec::new(), true);
+        assert_eq!(v.queued().map(|m| (m.text.as_str(), m.steer)).collect::<Vec<_>>(), [("Use tabs", true)]);
+        assert_eq!(said(&v), ["Write tidy.py"]);
+        v.apply(&ev("2", "assistant.message", json!({ "messageId": "a", "content": "Writing it with spaces." })));
+        v.apply(&ev("3", "user.message", json!({ "content": "Use tabs" })));
+        assert_eq!(said(&v), ["Write tidy.py", "(reply)", "Use tabs"]);
+        assert_eq!(v.queued().count(), 0);
+    }
+
+    #[test]
+    fn a_steered_message_read_before_a_queued_one_shows_once_in_that_order() {
+        let mut v = working();
+        v.echo_user_shown("Then run it", "Then run it", Vec::new(), false);
+        v.echo_user_shown("Use tabs", "Use tabs", Vec::new(), true);
+        v.apply(&ev("2", "user.message", json!({ "content": "Use tabs" })));
+        v.apply(&ev("3", "user.message", json!({ "content": "Then run it" })));
+        assert_eq!(said(&v), ["Write tidy.py", "Use tabs", "Then run it"]);
+        assert_eq!(v.queued().count(), 0);
+    }
+
+    #[test]
+    fn a_message_sent_as_the_turn_ends_shows_once() {
+        let mut v = working();
+        v.echo_user_shown("Then run it", "Then run it", Vec::new(), false);
+        v.apply(&ev("2", "session.idle", json!({})));
+        assert_eq!(said(&v), ["Write tidy.py", "Then run it"]);
+        assert_eq!(v.queued().count(), 0);
+        v.apply(&ev("3", "user.message", json!({ "content": "Then run it" })));
+        assert_eq!(said(&v), ["Write tidy.py", "Then run it"]);
     }
 }

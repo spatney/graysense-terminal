@@ -89,6 +89,8 @@ fn main() {
             commands::search,
             commands::app_view,
             commands::list_dir,
+            commands::complete_path,
+            commands::save_pasted_image,
             commands::read_text,
             commands::terminal_shells,
             commands::terminal_spawn,

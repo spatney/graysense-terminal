@@ -893,6 +893,13 @@ function buildSections({ settings, app, update, shells, memories, toReview }: Ct
           below: <EffortSelect value={settings.default_effort} models={app.models} />,
         },
         {
+          id: 'auto-approve',
+          label: 'Approve all tool calls by default',
+          desc: 'New sessions run tools without asking, including commands and file changes. Existing and resumed sessions are unchanged. You can turn this off for each session.',
+          keywords: 'approval permissions allow automatic new sessions',
+          toggle: { on: settings.default_auto_approve, onChange: (on) => void change({ default_auto_approve: on }) },
+        },
+        {
           id: 'session-folders',
           label: 'Give each session its own folder',
           desc: 'Named after its first message, inside the sessions folder.',

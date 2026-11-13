@@ -3,6 +3,18 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.2.0 — 2026-11-13
+
+- **Steer Copilot while it works**: press Enter while an agent is busy and Copilot reads your
+  message at its next step, without waiting for the turn to finish. Ctrl+Enter (or Ctrl+click on
+  send) queues it for after the turn instead. Waiting messages show below the turn.
+- **Mention files with `@`**: type `@` in the message box to autocomplete paths from the session
+  folder. Tab or Enter picks a file or opens a folder; mentioned files are attached when you send.
+- **Paste images**: Ctrl+V a screenshot or a copied picture into the message box to attach it.
+  Pasting on the home screen starts a session.
+- **Approve all tool calls by default**: a new setting (Settings > Agents) lets new sessions run
+  tools without asking. It's off by default, and each session keeps its own approval toggle.
+
 ## 0.1.0 — 2026-11-13
 
 The first release of Graysense: a futuristic workbench for GitHub Copilot agents. A Rust core on the

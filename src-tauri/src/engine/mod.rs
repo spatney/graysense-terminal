@@ -497,6 +497,7 @@ impl Core {
     pub fn new_agent(&mut self, cwd: PathBuf, prompt: Option<String>, resume: Option<String>, mission: Option<u64>, incognito: bool) -> BayId {
         let id = self.alloc_bay();
         let mut view = AgentView::new(id, cwd.clone(), Mode::Interactive);
+        view.auto_approve.store(resume.is_none() && self.settings.default_auto_approve, Ordering::Relaxed);
         view.project = self.project_for(&cwd);
         view.mission = mission;
         view.session_id = resume.clone();
@@ -555,6 +556,7 @@ impl Core {
         let id = self.alloc_bay();
         let root = self.settings.sessions_root();
         let mut view = AgentView::new(id, root.clone(), Mode::Interactive);
+        view.auto_approve.store(self.settings.default_auto_approve, Ordering::Relaxed);
         view.project = self.project_for(&root);
         view.deferred = true;
         view.incognito = incognito;
@@ -600,7 +602,7 @@ impl Core {
         view.status = Status::Booting;
         view.title = Some(text.clone());
         let names = files.iter().map(|p| settings::dir_name(p)).collect();
-        view.echo_user_shown(&text, &sent, names);
+        view.echo_user_shown(&text, &sent, names, false);
         capture_explicit_memory(&memory, enabled, view, &text);
         let (name, user) = (view.name.clone().unwrap_or_else(|| sessions::short_title(&text)), view.name.is_some());
         let Some(view) = self.agent(bay) else { return };
@@ -733,7 +735,7 @@ impl Core {
                 v.echo_user(&m.brief());
                 v.mission = Some(id);
                 v.learn_due = None;
-                self.backend.send(Cmd::Send { bay, text: m.brief(), files: Vec::new() });
+                self.backend.send(Cmd::Send { bay, text: m.brief(), files: Vec::new(), steer: false });
             }
             BayKind::Shell(_) => return Err("Missions go to agents. Drop it on an agent, or launch it in a new session.".into()),
         }
@@ -961,6 +963,7 @@ impl Core {
             }
             Evt::SessionClosed { bay } => {
                 if let Some(v) = self.agent_mut(bay) {
+                    v.show_queued();
                     v.status = Status::Offline;
                 }
             }

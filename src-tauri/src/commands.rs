@@ -144,6 +144,24 @@ pub fn list_dir(path: String) -> Result<Vec<crate::util::DirEntry>, String> {
     crate::util::list_dir(Path::new(&path))
 }
 
+#[tauri::command(async)]
+pub fn complete_path(directory: String, prefix: String) -> Result<Vec<crate::util::DirEntry>, String> {
+    crate::util::complete_path(Path::new(&directory), &prefix)
+}
+
+/// Keep an image pasted into a message box (the request body is its bytes); returns its path, to
+/// attach.
+#[tauri::command(async)]
+pub fn save_pasted_image(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes: std::borrow::Cow<[u8]> = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.into(),
+        // Without the IPC protocol (its postMessage fallback), bytes arrive as a JSON array.
+        tauri::ipc::InvokeBody::Json(value) => <Vec<u8> as serde::Deserialize>::deserialize(value).map_err(|_| "That isn't an image.")?.into(),
+    };
+    let dir = crate::settings::config_dir().join("pasted-images");
+    crate::util::save_pasted_image(&dir, &bytes).map(|p| p.display().to_string())
+}
+
 /// The start of a text file, for a preview (`None` for binaries).
 #[tauri::command(async)]
 pub fn read_text(path: String) -> Result<Option<String>, String> {

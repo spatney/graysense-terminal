@@ -55,6 +55,15 @@ export interface AgentDto {
   /** Memory scope key of the agent's project (matches MemoryDto.project). */
   projectKey: string;
   sentHistory: string[];
+  /** Messages sent mid-turn that the agent hasn't read yet, oldest first. */
+  queued: QueuedMessage[];
+}
+
+export interface QueuedMessage {
+  text: string;
+  files: string[];
+  /** Read at the agent's next step rather than after its turn. */
+  steer: boolean;
 }
 
 export interface BayDto {
@@ -135,7 +144,6 @@ export interface PermissionDto {
 export interface UserItem {
   type: 'user';
   text: string;
-  queued: boolean;
   files: string[];
   /** How long the agent worked on it (ms), once a turn of its has ended. */
   took?: number | null;
@@ -440,6 +448,7 @@ export interface Settings {
   zoom: number;
   default_model: string | null;
   default_effort: string | null;
+  default_auto_approve: boolean;
   shell: string | null;
   sessions_folder: string;
   session_folders: boolean;
@@ -527,7 +536,8 @@ export type Action =
   | { type: 'maximizeBay'; bay: BayId }
   | { type: 'moveBay'; bay: BayId; to: number }
   | { type: 'shellTitle'; bay: BayId; title: string }
-  | { type: 'send'; bay: BayId; text: string }
+  /** `queue`: if the agent is mid-turn, wait for the turn to end instead of steering it. */
+  | { type: 'send'; bay: BayId; text: string; queue?: boolean }
   | { type: 'abort'; bay: BayId }
   | { type: 'setModel'; bay: BayId; model: string; effort?: string | null }
   | { type: 'setMode'; bay: BayId; mode: string }

@@ -2,7 +2,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'rea
 import { act, captureNote, revealMemory } from '../../lib/api';
 import { baseName, duration, plural } from '../../lib/format';
 import { setDraft, focusComposer, useUi } from '../../lib/store';
-import type { AgentDto, AssistantItem, BayDto, ItemDto, MemoryItem, NoticeItem, RecallItem, ToolDto, UserItem } from '../../lib/types';
+import type { AgentDto, AssistantItem, BayDto, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
 import { CodeBlock, Markdown } from '../Markdown';
 import { Icon, copyText } from '../ui';
 import { PromptCard, isPrompt } from './Prompts';
@@ -517,47 +517,59 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
   );
 }, sameTurn);
 
-const UserTurnView = memo(function UserTurnView({ bayId, it, sessionId, sessionTitle }: { bayId: number; it: UserItem; sessionId: string | null; sessionTitle: string }) {
+function UserMessage({ text, files, queued }: { text: string; files: string[]; queued?: boolean }) {
   return (
-    <div className="turn turn--user">
-      <div className="user-msg">
-        <div className={`user-bubble ${it.queued ? 'queued' : ''}`}>{it.text}</div>
-        {it.files.length > 0 && (
-          <div className="user-files">
-            {it.files.map((f) => (
-              <span key={f} className="file-chip">
-                <Icon name="file" /> <span className="ellipsis">{f}</span>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-      {it.queued ? (
-        <span className="turn-queued">Queued: sends when the agent is ready</span>
-      ) : (
-        <div className="msg-actions">
-          <button type="button" className="icon-btn sm" data-tip="Copy" onClick={() => void copyText(it.text)}>
-            <Icon name="copy" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn sm"
-            data-tip="Edit and send again"
-            onClick={() => {
-              setDraft(bayId, it.text);
-              focusComposer(bayId);
-            }}
-          >
-            <Icon name="edit" />
-          </button>
-          <button type="button" className="icon-btn sm" data-tip="Save to notes" onClick={() => captureNote({ text: it.text, session: sessionId, title: sessionTitle })}>
-            <Icon name="bookmark" />
-          </button>
+    <div className="user-msg">
+      <div className={`user-bubble ${queued ? 'queued' : ''}`}>{text}</div>
+      {files.length > 0 && (
+        <div className="user-files">
+          {files.map((f) => (
+            <span key={f} className="file-chip">
+              <Icon name="file" /> <span className="ellipsis">{f}</span>
+            </span>
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+const UserTurnView = memo(function UserTurnView({ bayId, it, sessionId, sessionTitle }: { bayId: number; it: UserItem; sessionId: string | null; sessionTitle: string }) {
+  return (
+    <div className="turn turn--user">
+      <UserMessage text={it.text} files={it.files} />
+      <div className="msg-actions">
+        <button type="button" className="icon-btn sm" data-tip="Copy" onClick={() => void copyText(it.text)}>
+          <Icon name="copy" />
+        </button>
+        <button
+          type="button"
+          className="icon-btn sm"
+          data-tip="Edit and send again"
+          onClick={() => {
+            setDraft(bayId, it.text);
+            focusComposer(bayId);
+          }}
+        >
+          <Icon name="edit" />
+        </button>
+        <button type="button" className="icon-btn sm" data-tip="Save to notes" onClick={() => captureNote({ text: it.text, session: sessionId, title: sessionTitle })}>
+          <Icon name="bookmark" />
+        </button>
+      </div>
+    </div>
+  );
 });
+
+/** A message sent mid-turn, until the agent reads it. */
+function QueuedTurnView({ m }: { m: QueuedMessage }) {
+  return (
+    <div className="turn turn--user">
+      <UserMessage text={m.text} files={m.files} queued />
+      <span className="turn-queued">{m.steer ? 'Steering: Copilot reads this at its next step' : 'Queued: sends when the agent is ready'}</span>
+    </div>
+  );
+}
 
 // ------------------------------------------------------------------ transcript
 
@@ -640,6 +652,9 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
               <AgentTurnView key={b.key} bayId={bay.id} turn={b} agent={b.live ? agent : null} sessionId={agent.sessionId} sessionTitle={title} />
             ),
           )}
+          {agent.queued.map((m, i) => (
+            <QueuedTurnView key={`queued-${i}`} m={m} />
+          ))}
         </div>
       </div>
       {away && (

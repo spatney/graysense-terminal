@@ -36,6 +36,9 @@ export async function connect() {
 
 export const search = (query: string, limit = 40) => invoke<SearchHit[]>('search', { query, limit });
 export const listDir = (path: string) => invoke<DirEntry[]>('list_dir', { path });
+export const completePath = (directory: string, prefix: string) => invoke<DirEntry[]>('complete_path', { directory, prefix });
+/** Keep a pasted image's bytes where Graysense saves pasted images; resolves to its path. */
+export const savePastedImage = (bytes: Uint8Array) => invoke<string>('save_pasted_image', bytes);
 export const readText = (path: string) => invoke<string | null>('read_text', { path });
 
 /** Run what a toast's button asks for (an action, or a link). */

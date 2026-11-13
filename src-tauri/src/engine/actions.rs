@@ -28,7 +28,8 @@ pub enum Action {
     MoveBay { bay: BayId, to: usize },
     ShellTitle { bay: BayId, title: String },
     // agents
-    Send { bay: BayId, text: String },
+    /// `queue`: if the agent is mid-turn, wait for the turn to end instead of steering it.
+    Send { bay: BayId, text: String, #[serde(default)] queue: bool },
     Abort { bay: BayId },
     /// Switch model and/or thinking effort (ffort left out keeps the current one when the model offers it).
     SetModel {
@@ -209,7 +210,7 @@ impl Core {
                 }
                 ok
             }
-            Action::Send { bay, text } => self.send(bay, text).map(|_| Value::Null),
+            Action::Send { bay, text, queue } => self.send(bay, text, !queue).map(|_| Value::Null),
             Action::Abort { bay } => {
                 if self.agent(bay).is_some_and(|v| !v.deferred) {
                     self.backend.send(Cmd::Abort { bay });
@@ -251,7 +252,11 @@ impl Core {
             }
             Action::Attach { bay, paths } => {
                 let v = self.agent_mut(bay).ok_or("That agent is closed.")?;
-                for p in paths.into_iter().map(PathBuf::from).filter(|p| p.exists()) {
+                let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+                if let Some(p) = paths.iter().find(|p| !p.exists()) {
+                    return Err(format!("Couldn't attach {}: the path doesn't exist or isn't accessible.", p.display()));
+                }
+                for p in paths {
                     if !v.attachments.contains(&p) {
                         v.attachments.push(p);
                     }
@@ -305,7 +310,7 @@ impl Core {
             }
             Action::CanvasSend { bay, instance } => {
                 let text = self.agent(bay).and_then(|v| v.canvases.iter().find(|c| c.instance_id == instance)).map(|c| c.summary_for_agent()).ok_or("That canvas is closed.")?;
-                self.send(bay, text).map(|_| Value::Null)
+                self.send(bay, text, false).map(|_| Value::Null)
             }
             Action::CloseApp { bay, view } => {
                 self.apps.retain(|a| a.id != view);
@@ -328,7 +333,7 @@ impl Core {
             }
             Action::AppMessage { view, text } => {
                 let bay = self.app_view(view).map(|a| a.bay).ok_or("That app is closed.")?;
-                self.send(bay, text).map(|_| Value::Null)
+                self.send(bay, text, false).map(|_| Value::Null)
             }
             Action::LearnNow { bay } => {
                 if !self.settings.memory.learning() {
@@ -659,9 +664,10 @@ impl Core {
         }
     }
 
-    /// Send a message (with the attached files) to an agent.
-    pub fn send(&mut self, bay: BayId, text: String) -> Result<(), String> {
-        self.send_as(bay, text.clone(), text)
+    /// Send a message (with the attached files) to an agent. Mid-turn, `steer` has the agent read
+    /// it at its next step; otherwise it waits for the turn to end.
+    pub fn send(&mut self, bay: BayId, text: String, steer: bool) -> Result<(), String> {
+        self.send_as(bay, text.clone(), text, steer)
     }
 
     /// One of a note's attachments.
@@ -689,7 +695,7 @@ impl Core {
         if let Some(v) = self.agent_mut(bay) {
             v.attachments = files;
         }
-        self.send_as(bay, question, sent)?;
+        self.send_as(bay, question, sent, false)?;
         if let Some(v) = self.agent_mut(bay).filter(|_| !entries.is_empty()) {
             v.memory_used.extend(entries.iter().cloned());
             v.push(Item::Recall { entries });
@@ -699,7 +705,7 @@ impl Core {
 
     /// Send `sent` to an agent while its transcript shows `shown` (they differ when Graysense adds
     /// context the user doesn't need to see again).
-    pub fn send_as(&mut self, bay: BayId, shown: String, sent: String) -> Result<(), String> {
+    pub fn send_as(&mut self, bay: BayId, shown: String, sent: String, steer: bool) -> Result<(), String> {
         let text = shown.trim_end().to_owned();
         let sent = sent.trim_end().to_owned();
         let v = self.agent(bay).ok_or("That agent is closed.")?;
@@ -728,7 +734,7 @@ impl Core {
                 name_session = Some(name);
             }
         }
-        v.echo_user_shown(&text, &sent, names);
+        v.echo_user_shown(&text, &sent, names, steer);
         v.learn_due = None;
         super::capture_explicit_memory(&memory, enabled, v, &text);
         if let Some((id, name)) = index_name {
@@ -738,7 +744,7 @@ impl Core {
         if let Some(name) = name_session {
             self.backend.send(Cmd::NameSession { bay, name, user: false });
         }
-        self.backend.send(Cmd::Send { bay, text: sent, files });
+        self.backend.send(Cmd::Send { bay, text: sent, files, steer });
         Ok(())
     }
 

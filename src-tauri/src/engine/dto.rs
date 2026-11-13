@@ -110,7 +110,7 @@ pub struct IdText {
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ItemDto {
-    User { text: String, queued: bool, files: Vec<String>, took: Option<u64> },
+    User { text: String, files: Vec<String>, took: Option<u64> },
     Assistant { text: String, done: bool },
     Reasoning { text: String, done: bool },
     Tool(Box<ToolDto>),
@@ -295,7 +295,7 @@ fn permission_dto(p: &agent::PermissionPrompt) -> PermissionDto {
 
 pub fn item_dto(item: &Item) -> ItemDto {
     match item {
-        Item::User { text, queued, files, took } => ItemDto::User { text: text.clone(), queued: *queued, files: files.clone(), took: *took },
+        Item::User { text, files, took } => ItemDto::User { text: text.clone(), files: files.clone(), took: *took },
         Item::Assistant { text, done } => ItemDto::Assistant { text: text.clone(), done: *done },
         Item::Reasoning { text, done, .. } => ItemDto::Reasoning { text: text.clone(), done: *done },
         Item::Tool(c) => {
@@ -364,9 +364,8 @@ pub fn fingerprint(item: &Item) -> u64 {
     let mut h = DefaultHasher::new();
     std::mem::discriminant(item).hash(&mut h);
     match item {
-        Item::User { text, queued, files, took } => {
+        Item::User { text, files, took } => {
             hash_str(&mut h, text);
-            queued.hash(&mut h);
             files.len().hash(&mut h);
             took.hash(&mut h);
         }
@@ -462,6 +461,14 @@ pub struct AttachmentDto {
 
 #[derive(Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct QueuedDto {
+    pub text: String,
+    pub files: Vec<String>,
+    pub steer: bool,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentDto {
     pub session_id: Option<String>,
     pub model: Option<String>,
@@ -493,6 +500,8 @@ pub struct AgentDto {
     /// The memory scope key of the agent's project.
     pub project_key: String,
     pub sent_history: Vec<String>,
+    /// Messages sent mid-turn that the agent hasn't read yet.
+    pub queued: Vec<QueuedDto>,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -547,6 +556,7 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         project: v.project.name.clone(),
         project_key: v.project.key.clone(),
         sent_history: v.sent_history.iter().rev().take(50).rev().cloned().collect(),
+        queued: v.queued().map(|m| QueuedDto { text: m.text.clone(), files: m.files.clone(), steer: m.steer }).collect(),
     }
 }
 

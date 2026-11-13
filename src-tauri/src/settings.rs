@@ -64,6 +64,8 @@ pub struct Settings {
     pub default_model: Option<String>,
     /// Thinking effort new agents start with (None: each model's own default).
     pub default_effort: Option<String>,
+    /// New sessions approve all tool calls unless the user switches it off for that session.
+    pub default_auto_approve: bool,
     /// Custom shell program for terminal bays (defaults to pwsh, then powershell).
     pub shell: Option<String>,
     pub show_reasoning: bool,
@@ -127,6 +129,7 @@ impl Default for Settings {
             recent_dirs: Vec::new(),
             default_model: None,
             default_effort: None,
+            default_auto_approve: false,
             shell: None,
             show_reasoning: true,
             cursor_blink: true,
@@ -193,6 +196,7 @@ impl Settings {
         add("zoom", json!(self.zoom), json!("number from 0.7 to 1.6"), "Interface zoom (1 = 100%).");
         add("default_model", json!(self.default_model), model_choice.clone(), "Model new agents start with.");
         add("default_effort", json!(self.default_effort), json!({ "one_of": EFFORTS, "or": "null for each model's default" }), "How hard new agents think (reasoning effort). Models that don't offer the level use their default.");
+        add("default_auto_approve", json!(self.default_auto_approve), json!("boolean"), "Approve all tool calls in new sessions without asking, including commands and file changes. Existing and resumed sessions are unchanged; each new session can override this.");
         add("shell", json!(self.shell), json!("a shell id (pwsh, powershell, cmd, git-bash, wsl), a program or command line, or null for the default"), "Shell that new terminal bays run.");
         add("sessions_folder", json!(self.sessions_root().display().to_string()), json!("absolute folder path, or null for ~\\Graysense\\Sessions"), "Where new sessions get their own folders.");
         add("session_folders", json!(self.session_folders), json!("boolean"), "Give every new session its own folder inside sessions_folder.");
@@ -247,6 +251,7 @@ impl Settings {
                 "zoom" => next.zoom = number(0.7, 1.6)?,
                 "performance_hud" => next.perf_hud = flag()?,
                 "default_model" => next.default_model = model()?,
+                "default_auto_approve" => next.default_auto_approve = flag()?,
                 "default_effort" => {
                     next.default_effort = if v.is_null() {
                         None
@@ -390,6 +395,32 @@ pub fn dir_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_auto_approve_is_opt_in_and_persists() {
+        let mut settings: Settings = serde_json::from_value(json!({})).unwrap();
+        assert!(!settings.default_auto_approve);
+        assert_eq!(settings.describe(&[])["default_auto_approve"]["asks_user"], true);
+
+        let changes = json!({ "default_auto_approve": true });
+        settings.apply_patch(changes.as_object().unwrap(), &[]).unwrap();
+        let mut restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(restored.default_auto_approve);
+        assert_eq!(restored.values()["default_auto_approve"], true);
+
+        let changes = json!({ "default_auto_approve": false });
+        restored.apply_patch(changes.as_object().unwrap(), &[]).unwrap();
+        assert!(!restored.default_auto_approve);
+    }
+
+    #[test]
+    fn invalid_default_auto_approve_does_not_apply_other_changes() {
+        let mut settings = Settings::default();
+        let changes = json!({ "default_auto_approve": "true", "cursor_blink": false });
+        assert!(settings.apply_patch(changes.as_object().unwrap(), &[]).is_err());
+        assert!(!settings.default_auto_approve);
+        assert!(settings.cursor_blink);
+    }
 
     #[test]
     fn home_is_shortened_only_at_a_folder_boundary() {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { act, newSession, newShell, pickFiles, pickFolder } from '../../lib/api';
+import { act, completePath, newSession, newShell, pickFiles, pickFolder, savePastedImage } from '../../lib/api';
 import { effortLabel, human } from '../../lib/format';
+import { activeMention, completionQuery, insertMention, mentionedFiles } from '../../lib/mentions';
+import { fileIcon } from '../../lib/notes';
 import { setDraft, toast, useUi } from '../../lib/store';
-import type { BayDto, ModeId, ModelDto } from '../../lib/types';
+import type { BayDto, BayId, DirEntry, ModeId, ModelDto } from '../../lib/types';
 import { Icon, Seg, showMenu, useAutosize } from '../ui';
 import { ModelPicker, useModelChoice } from './ModelPicker';
 
@@ -43,6 +45,17 @@ function Ring({ used, limit }: { used: number; limit: number }) {
     </span>
   );
 }
+
+/**
+ * Images on the clipboard: a screenshot, or a copied picture or image file. A copy that carries
+ * text too (Office copies cells and slides as text and a picture) pastes as text.
+ */
+function pastedImages(data: DataTransfer): File[] {
+  if (data.getData('text/plain').trim()) return [];
+  const files = data.files.length ? Array.from(data.files) : Array.from(data.items, (item) => item.getAsFile());
+  return files.filter((f): f is File => !!f && f.type.startsWith('image/'));
+}
+
 /**
  * The message box. With a bay it talks to that agent; without one (the home screen) sending
  * starts a new session with the message.
@@ -53,13 +66,54 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
   const text = useUi((s) => s.drafts[id] ?? '');
   const focusTick = useUi((s) => s.focusTick[id] ?? 0);
   const models = useUi((s) => s.app?.models ?? NO_MODELS);
+  const defaultDir = useUi((s) => s.app?.defaultDir ?? '');
+  const home = useUi((s) => s.app?.home ?? '');
   const choice = useModelChoice(bay);
   const [picker, setPicker] = useState<HTMLElement | null>(null);
   const closePicker = useCallback(() => setPicker(null), []);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [hot, setHot] = useState(0);
   const [history, setHistory] = useState<number | null>(null);
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const [focused, setFocused] = useState(false);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [fileHot, setFileHot] = useState(0);
+  const [completion, setCompletion] = useState<{ key: string; entries: DirEntry[]; error: string | null } | null>(null);
+  const fileMenu = useRef<HTMLDivElement>(null);
+  const submitting = useRef(false);
+  // On the home screen a pasted image starts a session; pastes made while it opens join it.
+  const homeSession = useRef<Promise<BayId | undefined> | null>(null);
   useAutosize(ref, text, 300);
+
+  const mention = focused ? activeMention(text, selection.start, selection.end) : null;
+  const mentionKey = JSON.stringify([id, text, selection.start, selection.end]);
+  const root = agent?.deferred ? defaultDir : bay?.cwd ?? defaultDir;
+  const fileOpen = !!mention && !!root && dismissed !== mentionKey;
+  const query = fileOpen ? completionQuery(mention!.query, root, home) : null;
+  const directory = query?.directory;
+  const prefix = query?.prefix;
+  const queryKey = query ? JSON.stringify([directory, prefix]) : '';
+  const results = completion?.key === queryKey ? completion : null;
+  const files = results?.entries ?? [];
+
+  useEffect(() => {
+    setFileHot(0);
+    if (directory === undefined || prefix === undefined) return;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      completePath(directory, prefix)
+        .then((entries) => live && setCompletion({ key: queryKey, entries, error: null }))
+        .catch((error) => live && setCompletion({ key: queryKey, entries: [], error: String(error) }));
+    }, 100);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [directory, prefix, queryKey]);
+
+  useEffect(() => {
+    fileMenu.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [fileHot, results]);
 
   useEffect(() => {
     if (autoFocus || focusTick) requestAnimationFrame(() => ref.current?.focus());
@@ -74,6 +128,18 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
   useEffect(() => setHot(0), [slash.length]);
 
   const set = (v: string) => setDraft(id, v);
+
+  const chooseFile = (entry: DirEntry) => {
+    if (!mention) return;
+    const next = insertMention(text, mention, entry);
+    set(next.text);
+    setSelection({ start: next.caret, end: next.caret });
+    setHistory(null);
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
 
   const runSlash = async (line: string): Promise<boolean> => {
     const m = /^\/(\w+)\s*(.*)$/s.exec(line.trim());
@@ -148,27 +214,85 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
     }
   };
 
-  const submit = async () => {
+  /** `queue`: if the agent is mid-turn, wait for the turn to end instead of steering it. */
+  const submit = async (queue = false) => {
     const value = text.trim();
-    if (!value) return;
-    setHistory(null);
-    if (!bay) {
-      set('');
-      await newSession(value);
-      return;
+    if (!value || submitting.current) return;
+    submitting.current = true;
+    try {
+      setHistory(null);
+      const paths = mentionedFiles(value);
+      if (!bay && !paths.length) {
+        set('');
+        const created = await newSession(value);
+        if (created === undefined && !useUi.getState().drafts[id]) set(value);
+        return;
+      }
+      if (value.startsWith('/') && (await runSlash(value))) {
+        set('');
+        return;
+      }
+      const target = bay?.id ?? await newSession();
+      if (target === undefined) return;
+      if (!bay) {
+        setDraft(target, value);
+        if (useUi.getState().drafts[id] === text) set('');
+      }
+      if (paths.length && await act({ type: 'attach', bay: target, paths }) === undefined) return;
+      if (useUi.getState().drafts[target] === (bay ? text : value)) setDraft(target, '');
+      window.dispatchEvent(new CustomEvent('gs-sent', { detail: target }));
+      const ok = await act({ type: 'send', bay: target, text: value, queue });
+      // Sending failed (the error is shown): give the text back.
+      if (ok === undefined && !useUi.getState().drafts[target]) setDraft(target, value);
+    } finally {
+      submitting.current = false;
     }
-    if (value.startsWith('/') && (await runSlash(value))) {
+  };
+
+  const openHomeSession = async () => {
+    const created = await newSession();
+    if (created === undefined) homeSession.current = null;
+    else {
+      setDraft(created, useUi.getState().drafts[id] ?? '');
       set('');
-      return;
     }
-    set('');
-    window.dispatchEvent(new CustomEvent('gs-sent', { detail: bay.id }));
-    const ok = await act({ type: 'send', bay: bay.id, text: value });
-    // Sending failed (the error is shown): give the text back.
-    if (ok === undefined && !useUi.getState().drafts[id]) set(value);
+    return created;
+  };
+
+  /** Keep pasted images and attach them to the next message. */
+  const attachPasted = async (images: File[]) => {
+    const paths: string[] = [];
+    for (const image of images) {
+      try {
+        paths.push(await savePastedImage(new Uint8Array(await image.arrayBuffer())));
+      } catch (e) {
+        toast('error', String(e));
+      }
+    }
+    if (!paths.length) return;
+    const target = bay?.id ?? (await (homeSession.current ??= openHomeSession()));
+    if (target !== undefined) await act({ type: 'attach', bay: target, paths });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (fileOpen && !e.shiftKey) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setDismissed(mentionKey);
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (files.length) setFileHot((h) => (h + (e.key === 'ArrowDown' ? 1 : files.length - 1)) % files.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab' && files.length > 0) {
+        e.preventDefault();
+        if (files[fileHot]) chooseFile(files[fileHot]);
+        return;
+      }
+    }
     if (slash.length && !e.shiftKey) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -190,7 +314,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      void submit();
+      void submit(e.ctrlKey || e.metaKey);
       return;
     }
     if (e.key === 'Escape') {
@@ -255,11 +379,42 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
   };
 
   const canSend = text.trim().length > 0;
-  const hint = placeholder ?? (bay ? (busy ? 'Add to the queue, or press Esc to stop' : agent?.deferred ? 'What should we work on?' : 'Reply to Copilot') : 'Ask Copilot to build, fix or explain anything');
+  // Mid-turn, a message steers the agent (it starts with the turn while the session boots).
+  const steering = busy && agent?.status.kind !== 'booting';
+  const hint = placeholder ?? (bay ? (steering ? 'Steer Copilot, Ctrl+Enter to queue, Esc to stop' : busy ? 'Add to the queue, or press Esc to stop' : agent?.deferred ? 'What should we work on?' : 'Reply to Copilot') : 'Ask Copilot to build, fix or explain anything');
 
   return (
     <div className="composer-wrap">
       <div className="composer">
+        {fileOpen && (
+          <div className="slash-menu file-mention-menu">
+            <div className="file-mention-heading ellipsis" title={directory}>{directory}</div>
+            <div ref={fileMenu} className="file-mention-results" id={`file-mentions-${id}`} role="listbox" aria-label="File paths">
+              {files.map((entry, i) => (
+                <button
+                  key={entry.path}
+                  id={`file-mention-${id}-${i}`}
+                  type="button"
+                  role="option"
+                  aria-selected={i === fileHot}
+                  className={`slash-item ${i === fileHot ? 'hot' : ''}`}
+                  onPointerMove={() => setFileHot(i)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => chooseFile(entry)}
+                  title={entry.path}
+                >
+                  <Icon name={entry.isDir ? 'folder' : 'file'} />
+                  <b className="ellipsis">{entry.name}</b>
+                  {entry.isDir && <Icon name="chevron-right" className="desc" />}
+                </button>
+              ))}
+            </div>
+            {!files.length && (
+              <div className="file-mention-status" role="status">{results?.error ?? (results ? 'No matching paths' : 'Loading paths...')}</div>
+            )}
+            <div className="file-mention-heading">Up/Down to choose · Tab/Enter to select · Esc to dismiss</div>
+          </div>
+        )}
         {slash.length > 0 && (
           <div className="slash-menu" role="listbox">
             {slash.map((c, i) => (
@@ -286,7 +441,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
           <div className="composer-attachments">
             {agent.attachments.map((a) => (
               <span key={a.path} className="attach-chip" data-tip={a.path}>
-                <Icon name={a.isDir ? 'folder' : 'file'} />
+                <Icon name={fileIcon(a.name, a.isDir ? 'folder' : 'file')} />
                 <span className="ellipsis">{a.name}</span>
                 <button type="button" className="icon-btn sm" aria-label={`Remove ${a.name}`} onClick={() => void act({ type: 'detach', bay: bay!.id, path: a.path })}>
                   <Icon name="close" />
@@ -301,15 +456,35 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
           value={text}
           placeholder={hint}
           spellCheck
+          role="combobox"
+          aria-label="Message"
+          aria-autocomplete="list"
+          aria-expanded={fileOpen}
+          aria-controls={fileOpen ? `file-mentions-${id}` : undefined}
+          aria-activedescendant={fileOpen && files[fileHot] ? `file-mention-${id}-${fileHot}` : undefined}
+          onFocus={() => {
+            setFocused(true);
+            setDismissed(null);
+          }}
+          onBlur={() => setFocused(false)}
+          onSelect={(e) => setSelection({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })}
           onChange={(e) => {
             set(e.target.value);
+            setDismissed(null);
+            setSelection({ start: e.target.selectionStart, end: e.target.selectionEnd });
             setHistory(null);
           }}
           onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            const images = pastedImages(e.clipboardData);
+            if (!images.length) return;
+            e.preventDefault();
+            void attachPasted(images);
+          }}
         />
         <div className="composer-bar">
           {bay && (
-            <button type="button" className="icon-btn" data-tip="Attach files" onClick={(e) => attachMenu(e.currentTarget)}>
+            <button type="button" className="icon-btn" data-tip="Attach files, type @ to mention a path, or paste an image" onClick={(e) => attachMenu(e.currentTarget)}>
               <Icon name="add" />
             </button>
           )}
@@ -351,7 +526,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
               <Icon name="debug-stop" />
             </button>
           ) : (
-            <button type="button" className="send-btn" disabled={!canSend} data-tip={busy ? 'Queue message' : 'Send'} data-keys="Enter" onClick={() => void submit()}>
+            <button type="button" className="send-btn" disabled={!canSend} data-tip={steering ? 'Steer Copilot (Ctrl+click to queue)' : busy ? 'Queue message' : 'Send'} data-keys="Enter" onClick={(e) => void submit(e.ctrlKey || e.metaKey)}>
               <Icon name="arrow-up" />
             </button>
           )}
