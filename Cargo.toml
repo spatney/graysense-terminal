@@ -33,6 +33,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wry = "0.57"
 raw-window-handle = "0.6"
+# Installs and updates (keep in step with the vpk version in scripts/release.ps1).
+velopack = { version = "=1.2.161", features = ["public-utils"] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi"] }

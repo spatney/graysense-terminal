@@ -35,6 +35,8 @@ pub enum Command {
     ReviewMemories,
     Search,
     Shortcuts,
+    CheckUpdates,
+    RestartToUpdate,
     ResumeSession(String),
     OpenDir(String, bool),
     BrowseDir(bool),
@@ -63,15 +65,17 @@ pub struct Palette {
     focus: bool,
     /// Current memory switch, so the toggle command says what it will do.
     pub memory_on: bool,
+    /// A downloaded update is waiting, so "Restart to update" is offered.
+    pub update_ready: bool,
 }
 
 impl Default for Palette {
     fn default() -> Self {
-        Palette { open: false, mode: Mode::Commands, query: String::new(), selected: 0, focus: false, memory_on: true }
+        Palette { open: false, mode: Mode::Commands, query: String::new(), selected: 0, focus: false, memory_on: true, update_ready: false }
     }
 }
 
-fn commands(memory_on: bool) -> Vec<Entry> {
+fn commands(memory_on: bool, update_ready: bool) -> Vec<Entry> {
     let e = |cmd, title: &str, icon, keys| Entry { cmd, title: title.into(), detail: String::new(), icon, keys };
     let mut v = vec![
         e(Command::NewAgent, "New session", icon::BOT, &["Ctrl", "Shift", "N"][..]),
@@ -107,7 +111,11 @@ fn commands(memory_on: bool) -> Vec<Entry> {
         e(Command::TogglePerf, "Toggle performance stats", icon::BAR_CHART, &[][..]),
         e(Command::OpenConfig, "Open config folder", icon::FOLDER, &[][..]),
         e(Command::Shortcuts, "Keyboard shortcuts", icon::INFO, &["Ctrl", "/"][..]),
+        e(Command::CheckUpdates, "Check for updates", icon::DOWNLOAD, &[][..]),
     ];
+    if update_ready {
+        v.insert(0, e(Command::RestartToUpdate, "Restart to update", icon::UPDATE, &[][..]));
+    }
     for t in ThemeId::ALL {
         v.push(Entry { cmd: Command::Theme(t), title: format!("Theme: {}", t.name()), detail: String::new(), icon: icon::SETTINGS, keys: &[] });
     }
@@ -167,7 +175,7 @@ impl Palette {
         }
 
         let entries: Vec<Entry> = match self.mode {
-            Mode::Commands => commands(self.memory_on),
+            Mode::Commands => commands(self.memory_on, self.update_ready),
             Mode::Sessions => sessions
                 .iter()
                 .map(|s| Entry {

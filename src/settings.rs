@@ -71,6 +71,10 @@ pub struct Settings {
     pub sessions_root: Option<String>,
     /// New sessions get their own folder under the sessions folder (otherwise the last folder used).
     pub session_folders: bool,
+    /// Installed copies download new versions in the background and install them on restart.
+    pub auto_update: bool,
+    /// The installed version that last ran, to tell the user when it has been updated.
+    pub last_version: Option<String>,
 }
 
 /// Memory controls. `enabled = false` stops both learning and using memories.
@@ -122,6 +126,8 @@ impl Default for Settings {
             memory: MemorySettings::default(),
             sessions_root: None,
             session_folders: true,
+            auto_update: true,
+            last_version: None,
         }
     }
 }
@@ -179,6 +185,7 @@ impl Settings {
         add("shell", json!(self.shell), json!("program or command line, or null for PowerShell"), "Shell that new terminal bays run.");
         add("sessions_folder", json!(self.sessions_root().display().to_string()), json!("absolute folder path, or null for ~\\Graysense\\Sessions"), "Where new sessions get their own folders.");
         add("session_folders", json!(self.session_folders), json!("boolean"), "Give every new session its own folder inside sessions_folder.");
+        add("auto_update", json!(self.auto_update), json!("boolean"), "Download Graysense updates in the background; they install on restart or when Graysense closes.");
         add("memory.enabled", json!(self.memory.enabled), json!("boolean"), "Master switch for Graysense memory.");
         add("memory.learn", json!(self.memory.learn), json!("boolean"), "Learn from conversations in the background.");
         add("memory.share", json!(self.memory.inject), json!("boolean"), "Share relevant memories with agents.");
@@ -229,6 +236,7 @@ impl Settings {
                     }
                 }
                 "session_folders" => next.session_folders = flag()?,
+                "auto_update" => next.auto_update = flag()?,
                 "memory.enabled" => next.memory.enabled = flag()?,
                 "memory.learn" => next.memory.learn = flag()?,
                 "memory.share" => next.memory.inject = flag()?,

@@ -32,6 +32,7 @@ use crate::sysmon::{self, SysStats};
 use crate::term::view::TermAction;
 use crate::term::{SpawnSpec, TermPane, render as term_render, view as term_view};
 use crate::theme::{self, Theme, icon_font, mix, semibold, ui as ui_font};
+use crate::update::{self, UiAction as UpdateAction, Updater};
 
 enum BayKind {
     Agent(Box<AgentView>),
@@ -155,6 +156,11 @@ pub struct GraysenseApp {
     search_rx: Option<Receiver<crate::search::Index>>,
     search_built: Option<Instant>,
     egui_ctx: egui::Context,
+    updater: Updater,
+    /// Asking before a restart-to-update stops agents that are working.
+    confirm_restart: bool,
+    /// Scroll Settings to About on its next frame.
+    reveal_about: bool,
 }
 
 /// What a curator run was reading, so its answer can be filed correctly.
@@ -223,6 +229,7 @@ impl GraysenseApp {
         let (tx, rx) = channel();
         let backend = Backend::spawn(&rt, UiTx::new(tx, ctx.clone()));
         backend.send(Cmd::Connect);
+        let updater = Updater::new(ctx.clone(), settings.auto_update);
         let mut app = GraysenseApp {
             rt,
             backend,
@@ -273,8 +280,12 @@ impl GraysenseApp {
             search_rx: None,
             search_built: None,
             egui_ctx: ctx.clone(),
+            updater,
+            confirm_restart: false,
+            reveal_about: false,
         };
         crate::memory::set_switches(app.settings.memory.enabled, app.settings.memory.inject);
+        app.note_new_version();
         if startup.restore {
             app.restore_workspace(&ctx);
         }
@@ -1071,6 +1082,92 @@ impl GraysenseApp {
         }
     }
 
+    // ------------------------------------------------------------------ updates
+
+    /// Tell the user when an installed copy starts on a new version.
+    fn note_new_version(&mut self) {
+        if !self.updater.installed() {
+            return;
+        }
+        let now = self.updater.version.clone();
+        if self.settings.last_version.as_deref() == Some(now.as_str()) {
+            return;
+        }
+        if self.settings.last_version.is_some() {
+            self.toast(Level::Ok, format!("Graysense updated to {now}. Its release notes are in Settings › About."));
+        }
+        self.settings.last_version = Some(now);
+        self.settings_dirty = true;
+    }
+
+    /// Open Settings scrolled to About, where update progress and errors show.
+    fn reveal_updates(&mut self) {
+        self.set_side(Some(SidePanel::Settings));
+        self.reveal_about = true;
+    }
+
+    fn update_action(&mut self, ctx: &egui::Context, a: UpdateAction) {
+        match a {
+            UpdateAction::Check => self.updater.check(),
+            UpdateAction::Download => self.updater.download(),
+            UpdateAction::Restart => self.restart_to_update(ctx, false),
+            UpdateAction::SetAuto(on) => {
+                self.settings.auto_update = on;
+                self.settings_dirty = true;
+                self.updater.set_auto(on);
+            }
+            UpdateAction::OpenUrl(u) => ctx.open_url(egui::OpenUrl::new_tab(u)),
+        }
+    }
+
+    /// Install the downloaded update and reopen Graysense with the same bays. Asks first while
+    /// agents are working, since restarting stops them.
+    fn restart_to_update(&mut self, ctx: &egui::Context, confirmed: bool) {
+        let working = self.bays.iter().filter(|b| matches!(&b.kind, BayKind::Agent(v) if v.status.is_busy())).count();
+        if working > 0 && !confirmed {
+            self.confirm_restart = true;
+            return;
+        }
+        self.confirm_restart = false;
+        match self.updater.restart() {
+            // Closing saves the workspace; the installer waits for this process to exit.
+            Ok(()) => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Err(e) => self.toast(Level::Error, format!("Couldn't install the update: {e}")),
+        }
+    }
+
+    fn restart_confirm_ui(&mut self, ctx: &egui::Context) {
+        let theme = self.theme.clone();
+        let working = self.bays.iter().filter(|b| matches!(&b.kind, BayKind::Agent(v) if v.status.is_busy())).count();
+        let version = self.updater.next.as_ref().map(|(v, _)| v.clone()).unwrap_or_default();
+        let frame = Frame::new().fill(theme.surface).stroke(Stroke::new(1.0, theme.border_strong)).corner_radius(CornerRadius::same(12)).inner_margin(Margin::same(20));
+        let mut choice = None;
+        let modal = egui::Modal::new(Id::unique("restart-to-update")).frame(frame).backdrop_color(theme::with_alpha(Color32::BLACK, 0.45)).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.label(RichText::new(format!("Restart to install Graysense {version}?")).font(semibold(15.0)));
+            ui.add_space(6.0);
+            let agents = if working == 1 { "An agent is".to_owned() } else { format!("{working} agents are") };
+            ui.add(egui::Label::new(RichText::new(format!("{agents} still working. Restarting stops them; your sessions reopen when Graysense is back.")).color(theme.text_dim)).wrap());
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                if kit::primary_button(ui, "Restart now", &theme).clicked() {
+                    choice = Some(true);
+                }
+                if kit::ghost_button(ui, "Not now", &theme).clicked() {
+                    choice = Some(false);
+                }
+            });
+        });
+        if modal.should_close() {
+            choice.get_or_insert(false);
+        }
+        match choice {
+            Some(true) => self.restart_to_update(ctx, true),
+            Some(false) => self.confirm_restart = false,
+            None => {}
+        }
+    }
+
     /// Apply settings an agent changed (the Settings panel applies its own as you click).
     fn settings_changed(&mut self, ctx: &egui::Context, before: &Settings) {
         if self.settings.theme != before.theme {
@@ -1088,6 +1185,9 @@ impl GraysenseApp {
         }
         if self.settings.layout != before.layout {
             self.maximized = false;
+        }
+        if self.settings.auto_update != before.auto_update {
+            self.updater.set_auto(self.settings.auto_update);
         }
         crate::memory::set_switches(self.settings.memory.enabled, self.settings.memory.inject);
         self.settings_dirty = true;
@@ -1508,6 +1608,11 @@ impl GraysenseApp {
             }
             Command::Search => self.open_search(""),
             Command::Shortcuts => self.show_shortcuts = true,
+            Command::CheckUpdates => {
+                self.reveal_updates();
+                self.updater.check();
+            }
+            Command::RestartToUpdate => self.restart_to_update(ctx, false),
         }
     }
 
@@ -1638,7 +1743,7 @@ impl GraysenseApp {
                 ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
             }
 
-            kit::mark(&p, pos2(rect.left() + 22.0, cy), 18.0, &theme);
+            kit::mark(&p, pos2(rect.left() + 22.0, cy), 20.0);
             let name = p.text(pos2(rect.left() + 38.0, cy), Align2::LEFT_CENTER, "Graysense", semibold(13.5), theme.text);
 
             // Window controls.
@@ -1790,6 +1895,8 @@ impl GraysenseApp {
 
     fn status_bar(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
+        let ctx = ui.ctx().clone();
+        let mut update_click = None;
         egui::Panel::bottom("statusbar").exact_size(26.0).frame(Frame::new().fill(theme.surface)).show_separator_line(false).show(ui, |ui| {
             let rect = ui.max_rect();
             let p = ui.painter().clone();
@@ -1850,6 +1957,29 @@ impl GraysenseApp {
                     .left()
                     - 14.0;
             }
+            let update = match self.updater.phase {
+                update::Phase::Ready if self.updater.ready() => Some(("Restart to update".to_owned(), true)),
+                update::Phase::Downloading(f) => Some((format!("Downloading update  {:.0}%", f * 100.0), false)),
+                _ => None,
+            };
+            if let Some((text, ready)) = update {
+                let color = if ready { theme.accent } else { theme.text_faint };
+                let g = p.layout_no_wrap(text.clone(), ui_font(11.5), color);
+                let r = Rect::from_min_max(pos2(right - g.size().x - 32.0, cy - 10.0), pos2(right, cy + 10.0));
+                let tip = if ready { "Install the update now; your sessions reopen afterwards" } else { "Open Settings › About" };
+                let resp = ui.interact(r, Id::unique("update-status"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip);
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &text));
+                if ready || resp.hovered() {
+                    let (fill, stroke) = if ready { (theme.accent_soft(), theme::with_alpha(theme.accent, 0.45)) } else { (theme.surface2, theme.border) };
+                    p.rect(r, CornerRadius::same(10), fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
+                }
+                p.text(pos2(r.left() + 15.0, cy), Align2::CENTER_CENTER, if ready { icon::UPDATE } else { icon::DOWNLOAD }, icon_font(10.5), color);
+                p.galley(pos2(r.left() + 26.0, cy - g.size().y / 2.0), g, color);
+                right = r.left() - 12.0;
+                if resp.clicked() {
+                    update_click = Some(ready);
+                }
+            }
             let running = self.bays.iter().filter(|b| matches!(&b.kind, BayKind::Agent(v) if v.status.is_busy())).count();
             let waiting = self.bays.iter().filter(|b| matches!(&b.kind, BayKind::Agent(v) if v.status.needs_attention())).count();
             if waiting > 0 {
@@ -1859,6 +1989,11 @@ impl GraysenseApp {
                 p.text(pos2(right, cy), Align2::RIGHT_CENTER, format!("{running} working"), ui_font(11.5), theme.accent);
             }
         });
+        match update_click {
+            Some(true) => self.restart_to_update(&ctx, false),
+            Some(false) => self.reveal_updates(),
+            None => {}
+        }
     }
 
     fn rail(&mut self, ui: &mut Ui) {
@@ -1884,7 +2019,8 @@ impl GraysenseApp {
                 }
             }
             let r = Rect::from_center_size(pos2(rect.center().x, rect.bottom() - 28.0), vec2(38.0, 38.0));
-            if self.rail_button(ui, &p, r, icon::SETTINGS, "Settings", self.settings.side_panel == Some(SidePanel::Settings), 0, &theme, false).is_some() {
+            let tip = if self.updater.ready() { "Settings  (an update is ready)" } else { "Settings" };
+            if self.rail_button(ui, &p, r, icon::SETTINGS, tip, self.settings.side_panel == Some(SidePanel::Settings), usize::from(self.updater.ready()), &theme, false).is_some() {
                 clicked = Some(SidePanel::Settings);
             }
             if let Some(panel) = clicked {
@@ -2239,6 +2375,15 @@ impl GraysenseApp {
             ui.label(RichText::new("Ctrl+/").font(ui_font(11.5)).color(theme.text_faint));
         });
         ui.add_space(8.0);
+        kit::section(ui, "About", theme);
+        if std::mem::take(&mut self.reveal_about) {
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
+        let t = self.t0.elapsed().as_secs_f32();
+        if let Some(a) = update::settings_ui(ui, &self.updater, self.settings.auto_update, theme, t) {
+            self.update_action(&ctx, a);
+        }
+        ui.add_space(8.0);
         if ui.button(format!("{}  Open config folder", icon::FOLDER)).clicked() {
             self.run(Command::OpenConfig, &ctx);
         }
@@ -2308,7 +2453,7 @@ impl GraysenseApp {
         let top = (area.center().y - total / 2.0).max(area.top() + 24.0);
         let cx = area.center().x;
         let p = ui.painter();
-        kit::mark(p, pos2(cx, top + 22.0), 44.0, &theme);
+        kit::mark(p, pos2(cx, top + 22.0), 52.0);
         p.text(pos2(cx, top + 72.0), Align2::CENTER_CENTER, "Graysense", semibold(24.0), theme.text);
         p.text(pos2(cx, top + 100.0), Align2::CENTER_CENTER, "A fast, flat terminal for Copilot agents", ui_font(13.5), theme.text_dim);
         let mut cmd = None;
@@ -2902,6 +3047,9 @@ impl eframe::App for GraysenseApp {
 
         self.drain_events(&ctx);
         self.poll_picker(&ctx);
+        if let Some(v) = self.updater.tick(self.settings.auto_update) {
+            self.toast(Level::Info, format!("Graysense {v} is ready. Restart to update, or it installs when you close Graysense."));
+        }
         self.pump_terms(&ctx, dt);
         if !self.palette.open {
             self.handle_shortcuts(&ctx);
@@ -2916,11 +3064,15 @@ impl eframe::App for GraysenseApp {
         let placements = egui::CentralPanel::no_frame().show(ui, |ui| self.bays_ui(ui, t, dt)).inner;
 
         self.palette.memory_on = self.settings.memory.enabled;
+        self.palette.update_ready = self.updater.ready();
         if let Some(cmd) = self.palette.show(&ctx, &self.theme, &self.sessions, &self.settings.recent_dirs) {
             self.run(cmd, &ctx);
         }
         if self.show_shortcuts {
             self.shortcuts_overlay(&ctx);
+        }
+        if self.confirm_restart {
+            self.restart_confirm_ui(&ctx);
         }
         self.poll_search_index();
         self.search_overlay(&ctx);
@@ -2928,7 +3080,7 @@ impl eframe::App for GraysenseApp {
         self.sync_window_title(&ctx);
 
         // Child webviews paint above egui: hide them while menus or the palette are open.
-        let overlay = self.palette.open || self.show_shortcuts || self.search_ui.open || egui::Popup::is_any_open(&ctx);
+        let overlay = self.palette.open || self.show_shortcuts || self.confirm_restart || self.search_ui.open || egui::Popup::is_any_open(&ctx);
         let theme = self.theme.clone();
         self.apps.layout(frame, &ctx, &placements, overlay, &theme);
         for (view, rect) in &placements {
@@ -2981,5 +3133,7 @@ impl eframe::App for GraysenseApp {
         self.session_index.save_if_dirty();
         self.settings.save();
         self.backend.shutdown(&self.rt);
+        // Last, so the installer (which waits for this process to exit) starts after cleanup.
+        self.updater.on_exit();
     }
 }

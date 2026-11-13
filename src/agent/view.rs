@@ -127,22 +127,6 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
     }
     right -= 6.0;
 
-    // Mode pill.
-    let mode_text = view.mode.label();
-    let mw = kit::pill_width(&p, mode_text, ui_font(11.5));
-    let mrect = slot(&mut right, mw);
-    let mresp = ui.interact(mrect, ui.scope_id().with("mode"), Sense::click()).on_hover_text("Click to cycle Ask → Plan → Autopilot").on_hover_cursor(CursorIcon::PointingHand);
-    let mode_fg = match view.mode {
-        Mode::Interactive => theme.text_dim,
-        Mode::Plan => theme.accent,
-        Mode::Autopilot => theme.warn,
-    };
-    kit::pill(&p, pos2(mrect.left(), cy), mode_text, ui_font(11.5), mode_fg, if mresp.hovered() { theme.surface3 } else { theme.surface2 });
-    if mresp.clicked() {
-        out.push(AgentAction::SetMode(view.mode.next()));
-    }
-    right -= 6.0;
-
     // Memory: what this agent started with (or that it's incognito). Incognito always stays
     // visible, collapsing to its icon when the bay is narrow.
     if view.incognito || !view.memory_used.is_empty() {
@@ -188,36 +172,6 @@ pub fn header(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out:
             }
             right -= 6.0;
         }
-    }
-
-    // Model pill + menu.
-    let model_text = view.model.clone().unwrap_or_else(|| "Default model".into());
-    let mw = kit::pill_width(&p, &model_text, ui_font(11.5)) + 14.0;
-    if right - mw > x + 180.0 {
-        let r = slot(&mut right, mw);
-        let resp = ui.interact(r, ui.scope_id().with("model"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Model: {model_text}")));
-        let pr = kit::pill(&p, pos2(r.left(), cy), &model_text, ui_font(11.5), theme.text_dim, if resp.hovered() { theme.surface3 } else { theme.surface2 });
-        p.text(pos2(pr.right() + 2.0, cy), Align2::LEFT_CENTER, icon::CHEVRON_DOWN, icon_font(8.0), theme.text_faint);
-        egui::Popup::menu(&resp).width(260.0).show(|ui| {
-            ui.set_max_height(380.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if cx.models.is_empty() {
-                    ui.label(RichText::new("Loading models…").color(theme.text_dim));
-                }
-                for m in cx.models {
-                    let current = view.model.as_deref() == Some(m.id.as_str());
-                    let label = match m.multiplier {
-                        Some(x) if x > 0.0 => format!("{}   ·  {x}×", m.name),
-                        _ => m.name.clone(),
-                    };
-                    if ui.selectable_label(current, label).clicked() {
-                        out.push(AgentAction::SetModel(m.id.clone()));
-                        ui.close();
-                    }
-                }
-            });
-        });
     }
 
     // Left side: title, live status and working directory, fitted into what's left.
@@ -323,16 +277,20 @@ pub fn body(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out: &
         (rect, None)
     };
 
-    let composer_h = composer_height(ui, view, main.width());
-    let transcript = Rect::from_min_max(main.min, pos2(main.right(), main.bottom() - composer_h));
-    let composer_rect = Rect::from_min_max(pos2(main.left(), main.bottom() - composer_h), main.max);
-
-    ui.scope_builder(UiBuilder::new().max_rect(transcript.shrink2(vec2(0.0, 2.0))).id_salt(("transcript", view.bay)), |ui| {
-        transcript_ui(ui, view, cx, out);
-    });
-    ui.scope_builder(UiBuilder::new().max_rect(composer_rect).id_salt(("composer", view.bay)), |ui| {
-        composer_ui(ui, view, cx, out);
-    });
+    let col = column(main);
+    if view.items.is_empty() {
+        hero_ui(ui, view, main, col, cx, out);
+    } else {
+        let composer_h = composer_height(ui, view, col.width(), false);
+        let crect = Rect::from_min_max(pos2(col.left(), main.bottom() - 12.0 - composer_h), pos2(col.right(), main.bottom() - 12.0));
+        let transcript = Rect::from_min_max(main.min, pos2(main.right(), crect.top() - 6.0));
+        ui.scope_builder(UiBuilder::new().max_rect(transcript.shrink2(vec2(0.0, 2.0))).id_salt(("transcript", view.bay)), |ui| {
+            transcript_ui(ui, view, cx, out);
+        });
+        ui.scope_builder(UiBuilder::new().max_rect(crect).id_salt(("composer", view.bay)), |ui| {
+            composer_ui(ui, view, cx, out, crect, false);
+        });
+    }
 
     let mut app_rect = None;
     if let Some(dock) = dock {
@@ -384,14 +342,25 @@ pub fn body(ui: &mut Ui, view: &mut AgentView, rect: Rect, cx: &AgentCtx, out: &
     app_rect
 }
 
-fn composer_height(ui: &Ui, view: &AgentView, width: f32) -> f32 {
-    let lines = ui.fonts_mut(|f| {
-        let galley = f.layout(view.composer.clone(), ui_font(13.5), Color32::WHITE, (width - 120.0).max(100.0));
-        galley.rows.len().max(1)
+/// Widest the conversation and composer get: a readable column, centered, like a chat app.
+const COLUMN: f32 = 860.0;
+
+/// The conversation column inside `area`.
+fn column(area: Rect) -> Rect {
+    let w = (area.width() - 24.0).clamp(0.0, COLUMN);
+    Rect::from_min_max(pos2(area.center().x - w / 2.0, area.top()), pos2(area.center().x + w / 2.0, area.bottom()))
+}
+
+fn composer_height(ui: &Ui, view: &AgentView, width: f32, hero: bool) -> f32 {
+    let font = ui_font(14.0);
+    let (lines, row_h) = ui.fonts_mut(|f| {
+        let galley = f.layout(view.composer.clone(), font.clone(), Color32::WHITE, (width - 32.0).max(100.0));
+        (galley.rows.len().max(1), f.row_height(&font))
     });
-    let rows = lines.clamp(1, 8) as f32;
-    let attach = if view.attachments.is_empty() { 0.0 } else { 32.0 };
-    44.0 + rows * 18.0 + attach
+    let rows = lines.clamp(if hero { 2 } else { 1 }, 10) as f32;
+    let attach = if view.attachments.is_empty() { 0.0 } else { 36.0 };
+    // Padding, attachments, the message, then the toolbar.
+    12.0 + attach + rows * row_h + 6.0 + 42.0
 }
 
 fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<AgentAction>) {
@@ -403,11 +372,6 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
     }
     view.heights.resize(view.items.len(), 48.0);
 
-    if view.items.is_empty() {
-        empty_state(ui, view, cx, out);
-        return;
-    }
-
     let mut md = MdOut { open_url: None, copy: None };
     let mut area = egui::ScrollArea::vertical().id_salt(("scroll", view.bay)).stick_to_bottom(true).auto_shrink([false; 2]);
     if std::mem::take(&mut view.scroll_to_end) {
@@ -418,7 +382,10 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
             let margin = 400.0;
             let mut y = 0.0;
             let n = view.items.len();
-            let inner_w = ui.available_width() - 24.0;
+            let full = ui.available_width();
+            let colw = (full - 24.0).clamp(0.0, COLUMN);
+            let lead = (full - colw) / 2.0 + 2.0;
+            let inner_w = colw - 4.0;
             for i in 0..n {
                 let h = view.heights[i];
                 let pending = view.items[i].pending();
@@ -428,7 +395,7 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
                 } else {
                     let top = ui.cursor().top();
                     ui.horizontal_top(|ui| {
-                        ui.add_space(14.0);
+                        ui.add_space(lead);
                         ui.vertical(|ui| {
                             ui.set_width(inner_w);
                             ui.add_space(6.0);
@@ -441,7 +408,7 @@ fn transcript_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec
                 y += view.heights[i];
             }
             if matches!(view.status, Status::Thinking | Status::Compacting) {
-                thinking_row(ui, view, cx);
+                thinking_row(ui, view, cx, lead);
             }
             ui.add_space(8.0);
         });
@@ -478,82 +445,112 @@ const FRESH_SUGGESTIONS: [&str; 4] = [
     "Draft a project plan as a Markdown checklist",
 ];
 
-/// Welcome state for a fresh agent: what it's working on and a few one-click starters.
-fn empty_state(ui: &mut Ui, view: &AgentView, cx: &AgentCtx, out: &mut Vec<AgentAction>) {
+/// A new conversation, like a chat app's home screen: a greeting, the composer in the middle, and
+/// a few starters that fill it in.
+fn hero_ui(ui: &mut Ui, view: &mut AgentView, main: Rect, col: Rect, cx: &AgentCtx, out: &mut Vec<AgentAction>) {
     let theme = cx.theme;
-    let r = ui.available_rect_before_wrap();
     let booting = view.status == Status::Booting;
-    let c = r.center() - vec2(0.0, if booting { 0.0 } else { 46.0 });
+    let composer_h = composer_height(ui, view, col.width(), true);
+    let show_starters = !booting && main.height() > 420.0;
+    let block = 60.0 + composer_h + if show_starters { 120.0 } else { 36.0 };
+    // A little above center, where the eye lands.
+    let top = (main.center().y - block / 2.0 - main.height() * 0.05).max(main.top() + 12.0);
     let p = ui.painter().clone();
-    kit::mark(&p, c - vec2(0.0, 44.0), 34.0, theme);
-    p.text(c, Align2::CENTER_CENTER, if booting { "Starting Copilot…" } else { "What should we build?" }, semibold(17.0), theme.text);
-    let sub = if view.deferred {
-        format!("Gets its own folder in {}", crate::settings::short_path(&view.cwd))
-    } else {
-        format!("Working in {}", crate::sessions::display_path(&view.cwd, cx.sessions_root))
-    };
-    p.text(c + vec2(0.0, 25.0), Align2::CENTER_CENTER, sub, ui_font(12.5), theme.text_dim);
+
+    let text = if booting { "Starting Copilot…".to_owned() } else { greeting(view) };
+    let g = kit::elided(&p, &text, semibold(if col.width() < 520.0 { 20.0 } else { 26.0 }), theme.text, (col.width() - 56.0).max(40.0));
+    let logo = (g.size().y + 6.0).round();
+    let cy = top + 22.0;
+    let x0 = col.center().x - (logo + 12.0 + g.size().x) / 2.0;
+    kit::mark(&p, pos2(x0 + logo / 2.0, cy), logo);
+    p.galley(pos2(x0 + logo + 12.0, cy - g.size().y / 2.0), g, theme.text);
+
+    let crect = Rect::from_min_size(pos2(col.left(), top + 60.0), vec2(col.width(), composer_h));
+    ui.scope_builder(UiBuilder::new().max_rect(crect).id_salt(("composer", view.bay)), |ui| {
+        composer_ui(ui, view, cx, out, crect, true);
+    });
+
+    let mut y = crect.bottom() + 16.0;
     if booting {
-        kit::spinner(&p, c + vec2(0.0, 58.0), 7.0, cx.t, theme.accent);
+        kit::spinner(&p, pos2(col.center().x, y + 10.0), 7.0, cx.t, theme.accent);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
         return;
     }
-    if r.height() < 260.0 {
-        return;
+    if show_starters {
+        y = starters(ui, view, col, y, theme) + 6.0;
     }
+    let place = crate::sessions::display_path(&view.cwd, cx.sessions_root);
+    let place = if view.deferred { format!("Gets its own folder in {place}") } else { format!("Working in {place}") };
+    let notes = [format!("{place}  ·  / for commands  ·  drop files to attach"), place];
+    if let Some(note) = notes.iter().find(|n| p.layout_no_wrap(n.to_string(), ui_font(11.5), theme.text_faint).size().x < col.width()) {
+        p.text(pos2(col.center().x, y + 10.0), Align2::CENTER_CENTER, note, ui_font(11.5), theme.text_faint);
+    }
+}
 
-    // Suggestion chips, packed into centred rows.
+fn greeting(view: &AgentView) -> String {
+    use chrono::Timelike;
+    let part = match chrono::Local::now().hour() {
+        5..=11 => "Morning",
+        12..=16 => "Afternoon",
+        17..=21 => "Evening",
+        _ => "Late night",
+    };
+    if view.deferred {
+        format!("{part}, what are we building?")
+    } else {
+        format!("{part}, what's next for {}?", crate::settings::dir_name(&view.cwd))
+    }
+}
+
+/// Starter prompts under the composer, in centered rows. Picking one fills in the composer, ready
+/// to edit or send. Returns the bottom of the last row.
+fn starters(ui: &mut Ui, view: &mut AgentView, col: Rect, mut y: f32, theme: &Theme) -> f32 {
+    let p = ui.painter().clone();
     let font = ui_font(12.5);
-    let max_w = (r.width() - 48.0).min(620.0);
-    let chips: Vec<(&str, f32)> = (if view.deferred { FRESH_SUGGESTIONS } else { SUGGESTIONS })
+    let items: Vec<(&str, f32)> = (if view.deferred { FRESH_SUGGESTIONS } else { SUGGESTIONS })
         .iter()
         .map(|s| (*s, p.layout_no_wrap(s.to_string(), font.clone(), theme.text).size().x + 28.0))
         .collect();
     let mut rows: Vec<Vec<(&str, f32)>> = vec![Vec::new()];
     let mut row_w = 0.0;
-    for (s, w) in chips {
-        if row_w + w > max_w && !rows.last().unwrap().is_empty() {
+    for (s, w) in items {
+        if row_w + w > col.width() && !rows.last().is_none_or(Vec::is_empty) {
             rows.push(Vec::new());
             row_w = 0.0;
         }
         row_w += w + 8.0;
-        rows.last_mut().unwrap().push((s, w));
+        if let Some(row) = rows.last_mut() {
+            row.push((s, w));
+        }
     }
-    let mut y = c.y + 58.0;
     for row in rows {
         let total: f32 = row.iter().map(|(_, w)| w + 8.0).sum::<f32>() - 8.0;
-        let mut x = c.x - total / 2.0;
+        let mut x = col.center().x - total / 2.0;
         for (s, w) in row {
             let chip = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
             let resp = ui.interact(chip, Id::unique(("suggest", view.bay, s)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
             let hovered = resp.hovered();
-            p.rect(chip, CornerRadius::same(15), if hovered { theme.surface3 } else { theme.surface2 }, Stroke::new(1.0, if hovered { theme.border_strong } else { theme.border }), StrokeKind::Inside);
+            p.rect(chip, CornerRadius::same(15), if hovered { theme.surface3 } else { theme.surface }, Stroke::new(1.0, if hovered { theme.border_strong } else { theme.border }), StrokeKind::Inside);
             p.text(chip.center(), Align2::CENTER_CENTER, s, font.clone(), if hovered { theme.text } else { theme.text_dim });
             if resp.clicked() {
-                out.push(AgentAction::Send(s.to_owned()));
+                view.composer = s.to_owned();
+                view.focus_composer = true;
+                set_cursor_end(ui.ctx(), Id::unique(("composer-edit", view.bay)), &view.composer);
             }
             x += w + 8.0;
         }
         y += 38.0;
     }
-    let tips = [
-        "Enter to send  ·  Shift+Enter for a new line  ·  / for commands  ·  drop a mission here to delegate it",
-        "Enter to send  ·  Shift+Enter for a new line  ·  / for commands",
-        "Enter to send  ·  / for commands",
-    ];
-    let tip = tips.iter().find(|t| p.layout_no_wrap(t.to_string(), ui_font(11.5), theme.text_faint).size().x + 32.0 < r.width()).copied();
-    if let Some(tip) = tip {
-        p.text(pos2(c.x, y + 14.0), Align2::CENTER_CENTER, tip, ui_font(11.5), theme.text_faint);
-    }
+    y
 }
 
 /// Live "the agent is working" row shown until text or a tool call arrives.
-fn thinking_row(ui: &mut Ui, view: &AgentView, cx: &AgentCtx) {
+fn thinking_row(ui: &mut Ui, view: &AgentView, cx: &AgentCtx, lead: f32) {
     let theme = cx.theme;
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.add_space(14.0);
+        ui.add_space(lead);
         let (r, _) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::hover());
         for k in 0..3 {
             let phase = cx.t * 5.0 - k as f32 * 0.7;
@@ -1260,11 +1257,10 @@ const SLASH: [(&str, &str, &str); 5] = [
 ];
 
 fn set_cursor_end(ctx: &egui::Context, id: Id, text: &str) {
-    if let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) {
-        let end = egui::text::CCursor::new(text.chars().count());
-        state.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(end)));
-        state.store(ctx, id);
-    }
+    let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
+    let end = egui::text::CCursor::new(text.chars().count());
+    state.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(end)));
+    state.store(ctx, id);
 }
 
 /// Command suggestions floating above the composer while typing `/…`.
@@ -1319,49 +1315,180 @@ fn slash_menu(ui: &mut Ui, view: &mut AgentView, composer: Rect, theme: &Theme, 
     }
 }
 
-fn composer_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<AgentAction>) {
+fn mode_color(mode: Mode, theme: &Theme) -> Color32 {
+    match mode {
+        Mode::Interactive => theme.text,
+        Mode::Plan => theme.accent,
+        Mode::Autopilot => theme.warn,
+    }
+}
+
+/// The agent's model by its display name ("Claude Sonnet 5.5").
+fn model_name(view: &AgentView, models: &[ModelInfo]) -> String {
+    match view.model.as_deref() {
+        Some(id) => models.iter().find(|m| m.id == id).map_or_else(|| id.to_owned(), |m| m.name.clone()),
+        None => "Default model".to_owned(),
+    }
+}
+
+fn short_count(n: i64) -> String {
+    match n {
+        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
+        n if n >= 1_000 => format!("{:.0}k", n as f64 / 1e3),
+        n => n.to_string(),
+    }
+}
+
+/// The message box: a rounded card with the message on top and a toolbar under it (attach, mode,
+/// model, context used, send), like Claude's and ChatGPT's.
+fn composer_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<AgentAction>, rect: Rect, hero: bool) {
     let theme = cx.theme;
-    let rect = ui.max_rect().shrink2(vec2(12.0, 8.0));
-    let p = ui.painter();
-    let focused_id = Id::unique(("composer-edit", view.bay));
-    let has_focus = ui.memory(|m| m.has_focus(focused_id));
-    p.rect(rect, CornerRadius::same(8), theme.surface2, Stroke::new(1.0, if has_focus { mix(theme.border_strong, theme.accent, 0.6) } else { theme.border }), StrokeKind::Inside);
+    let p = ui.painter().clone();
+    let edit_id = Id::unique(("composer-edit", view.bay));
+    let has_focus = ui.memory(|m| m.has_focus(edit_id));
+    // Clicking the card's empty space puts the cursor in the message.
+    if ui.interact(rect, Id::unique(("composer-card", view.bay)), Sense::click()).clicked() {
+        ui.memory_mut(|m| m.request_focus(edit_id));
+    }
+    let border = if has_focus { mix(theme.border_strong, theme.accent, 0.35) } else { theme.border_strong };
+    p.rect(rect, CornerRadius::same(14), theme.surface2, Stroke::new(1.0, border), StrokeKind::Inside);
 
     let busy = view.status.is_busy();
-    let btn_rect = Rect::from_min_size(pos2(rect.right() - 34.0, rect.bottom() - 32.0), vec2(26.0, 26.0));
-    let send_resp = ui.interact(btn_rect, Id::unique(("send", view.bay)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
     let can_send = !view.composer.trim().is_empty();
-    send_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if busy && !can_send { "Stop" } else { "Send" }));
-    let (glyph, fill) = if busy && !can_send {
-        (icon::STOP, theme.surface3)
-    } else if can_send {
-        (icon::SEND, theme.accent)
-    } else {
-        (icon::SEND, theme.surface3)
-    };
-    p.rect_filled(btn_rect, CornerRadius::same(6), if send_resp.hovered() { mix(fill, Color32::WHITE, 0.08) } else { fill });
-    p.text(btn_rect.center(), Align2::CENTER_CENTER, glyph, icon_font(12.0), if can_send { theme.on_accent } else { theme.text_dim });
-    let send_resp = send_resp.on_hover_text(if busy && !can_send { "Stop (Esc)" } else { "Send (Enter)" });
+    let stop_mode = busy && !can_send;
+    let bar = Rect::from_min_max(pos2(rect.left() + 8.0, rect.bottom() - 42.0), pos2(rect.right() - 8.0, rect.bottom() - 6.0));
+    let cy = bar.center().y;
 
-    // Attach files.
-    let attach_rect = btn_rect.translate(vec2(-30.0, 0.0));
-    let attach_resp = ui.interact(attach_rect, Id::unique(("attach", view.bay)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Attach files (or drop them here)");
-    attach_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Attach files"));
-    kit::paint_icon_button(ui, attach_rect, &attach_resp, icon::ATTACH, theme, false);
-    if attach_resp.clicked() {
+    // Send, or stop while the agent works.
+    let send_r = Rect::from_center_size(pos2(bar.right() - 16.0, cy), vec2(32.0, 32.0));
+    let send = ui.interact(send_r, Id::unique(("send", view.bay)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+    send.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if stop_mode { "Stop" } else { "Send" }));
+    let (fill, fg, glyph) = if stop_mode {
+        (theme.text, theme.surface, icon::STOP)
+    } else if can_send {
+        (theme.accent, theme.on_accent, icon::ARROW_UP)
+    } else {
+        (theme.surface3, theme.text_faint, icon::ARROW_UP)
+    };
+    let lit = send.hovered() && (can_send || stop_mode);
+    p.rect_filled(send_r, CornerRadius::same(9), if lit { mix(fill, Color32::WHITE, 0.1) } else { fill });
+    p.text(send_r.center(), Align2::CENTER_CENTER, glyph, icon_font(if stop_mode { 10.0 } else { 13.0 }), fg);
+    let send = send.on_hover_text(if stop_mode { "Stop (Esc)" } else { "Send (Enter)" });
+
+    let plus_r = Rect::from_center_size(pos2(bar.left() + 15.0, cy), vec2(30.0, 30.0));
+    let plus = ui.interact(plus_r, Id::unique(("attach", view.bay)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Attach files (or drop them here)");
+    plus.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Attach files"));
+    kit::paint_icon_button(ui, plus_r, &plus, icon::ADD, theme, false);
+    if plus.clicked() {
         out.push(AgentAction::Attach);
     }
 
-    // Context usage.
-    if let Some((cur, lim)) = view.context {
-        let frac = cur as f32 / lim.max(1) as f32;
-        let text = format!("{:.0}% context", frac * 100.0);
-        p.text(pos2(attach_rect.left() - 8.0, btn_rect.center().y), Align2::RIGHT_CENTER, text, ui_font(11.0), if frac > 0.8 { theme.warn } else { theme.text_faint });
+    // How much the agent does on its own: a segmented control, or just the current mode when narrow.
+    let model = model_name(view, cx.models);
+    let model_w = p.layout_no_wrap(model.clone(), ui_font(12.0), theme.text).size().x + 28.0;
+    let ring_w = if view.context.is_some() { 26.0 } else { 0.0 };
+    let modes = [
+        (Mode::Interactive, "Ask", "Asks before it edits files or runs commands"),
+        (Mode::Plan, "Plan", "Writes a plan for you to approve, then carries it out"),
+        (Mode::Autopilot, "Autopilot", "Works on its own until the task is done"),
+    ];
+    let seg_font = ui_font(12.0);
+    let seg_w: Vec<f32> = modes.iter().map(|(_, label, _)| p.layout_no_wrap(label.to_string(), seg_font.clone(), theme.text).size().x + 22.0).collect();
+    let track_w = seg_w.iter().sum::<f32>() + 4.0;
+    let mut x = plus_r.right() + 6.0;
+    if x + track_w + 12.0 + model_w.min(150.0) + ring_w < send_r.left() - 8.0 {
+        let track = Rect::from_min_size(pos2(x, cy - 14.0), vec2(track_w, 28.0));
+        p.rect_filled(track, CornerRadius::same(8), theme.surface);
+        let mut sx = track.left() + 2.0;
+        for ((mode, label, tip), w) in modes.iter().zip(&seg_w) {
+            let r = Rect::from_min_size(pos2(sx, track.top() + 2.0), vec2(*w, 24.0));
+            let selected = view.mode == *mode;
+            let resp = ui.interact(r, Id::unique(("mode", view.bay, *label)), Sense::click()).on_hover_text(*tip).on_hover_cursor(CursorIcon::PointingHand);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, *label));
+            if selected {
+                p.rect(r, CornerRadius::same(6), theme.surface3, Stroke::new(1.0, theme.border_strong), StrokeKind::Inside);
+            } else if resp.hovered() {
+                p.rect_filled(r, CornerRadius::same(6), theme.surface2);
+            }
+            let color = if selected { mode_color(*mode, theme) } else if resp.hovered() { theme.text } else { theme.text_dim };
+            p.text(r.center(), Align2::CENTER_CENTER, *label, seg_font.clone(), color);
+            if resp.clicked() && !selected {
+                out.push(AgentAction::SetMode(*mode));
+            }
+            sx += w;
+        }
+        x = track.right() + 8.0;
+    } else {
+        let label = view.mode.label();
+        let w = p.layout_no_wrap(label.to_owned(), seg_font.clone(), theme.text).size().x + 20.0;
+        let r = Rect::from_min_size(pos2(x, cy - 13.0), vec2(w, 26.0));
+        let resp = ui.interact(r, Id::unique(("mode", view.bay)), Sense::click()).on_hover_text("Click for the next mode: Ask → Plan → Autopilot").on_hover_cursor(CursorIcon::PointingHand);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Mode: {label}")));
+        p.rect(r, CornerRadius::same(7), if resp.hovered() { theme.surface3 } else { theme.surface }, Stroke::new(1.0, theme.border), StrokeKind::Inside);
+        p.text(r.center(), Align2::CENTER_CENTER, label, seg_font, mode_color(view.mode, theme));
+        if resp.clicked() {
+            out.push(AgentAction::SetMode(view.mode.next()));
+        }
+        x = r.right() + 8.0;
     }
 
-    let mut top = rect.top() + 6.0;
+    // Context used, then the model, right-aligned before the send button.
+    let mut right = send_r.left() - 6.0;
+    if let Some((cur, lim)) = view.context {
+        let frac = (cur as f32 / lim.max(1) as f32).clamp(0.0, 1.0);
+        let r = Rect::from_center_size(pos2(right - 11.0, cy), vec2(22.0, 22.0));
+        let tip = format!("{:.0}% of the context window used ({} of {} tokens)", frac * 100.0, short_count(cur), short_count(lim));
+        ui.interact(r, Id::unique(("context", view.bay)), Sense::hover()).on_hover_text(tip);
+        p.circle_stroke(r.center(), 7.0, Stroke::new(2.0, theme.surface3));
+        if frac > 0.0 {
+            let arc: Vec<egui::Pos2> = (0..=32)
+                .map(|k| {
+                    let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * k as f32 / 32.0;
+                    r.center() + vec2(a.cos(), a.sin()) * 7.0
+                })
+                .collect();
+            p.add(egui::Shape::line(arc, Stroke::new(2.0, if frac > 0.8 { theme.warn } else { theme.text_dim })));
+        }
+        right = r.left() - 2.0;
+    }
+    if right - x > 56.0 {
+        let w = model_w.min(right - x);
+        let r = Rect::from_min_size(pos2(right - w, cy - 13.0), vec2(w, 26.0));
+        let resp = ui.interact(r, Id::unique(("model", view.bay)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Model: {model}")));
+        let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+        if resp.hovered() || open {
+            p.rect_filled(r, CornerRadius::same(7), theme.surface3);
+        }
+        let color = if resp.hovered() || open { theme.text } else { theme.text_dim };
+        let g = kit::elided(&p, &model, ui_font(12.0), color, w - 26.0);
+        p.galley(pos2(r.left() + 9.0, cy - g.size().y / 2.0), g, color);
+        p.text(pos2(r.right() - 11.0, cy + 1.0), Align2::CENTER_CENTER, icon::CHEVRON_DOWN, icon_font(8.0), theme.text_faint);
+        egui::Popup::menu(&resp).align(egui::RectAlign::TOP_END).width(280.0).show(|ui| {
+            ui.set_max_height(380.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if cx.models.is_empty() {
+                    ui.label(RichText::new("Loading models…").color(theme.text_dim));
+                }
+                for m in cx.models {
+                    let current = view.model.as_deref() == Some(m.id.as_str());
+                    let label = match m.multiplier {
+                        Some(x) if x > 0.0 => format!("{}   ·  {x}×", m.name),
+                        _ => m.name.clone(),
+                    };
+                    if ui.selectable_label(current, label).clicked() {
+                        out.push(AgentAction::SetModel(m.id.clone()));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+
+    // Files going with the next message.
+    let mut top = rect.top() + 12.0;
     if !view.attachments.is_empty() {
-        let row = Rect::from_min_max(pos2(rect.left() + 8.0, top), pos2(rect.right() - 8.0, top + 26.0));
+        let row = Rect::from_min_max(pos2(rect.left() + 12.0, top), pos2(rect.right() - 12.0, top + 26.0));
         let mut remove = None;
         ui.scope_builder(UiBuilder::new().max_rect(row).id_salt(("attachments", view.bay)), |ui| {
             ui.horizontal(|ui| {
@@ -1377,10 +1504,12 @@ fn composer_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<A
         if let Some(k) = remove {
             view.attachments.remove(k);
         }
-        top += 32.0;
+        top += 36.0;
     }
-    let edit_rect = Rect::from_min_max(pos2(rect.left() + 10.0, top), pos2(rect.right() - 150.0, rect.bottom() - 6.0));
-    slash_menu(ui, view, rect, theme, focused_id, has_focus);
+
+    // The message itself.
+    let edit_rect = Rect::from_min_max(pos2(rect.left() + 16.0, top), pos2(rect.right() - 16.0, bar.top() - 2.0));
+    slash_menu(ui, view, rect, theme, edit_id, has_focus);
     let mut submitted = false;
     let mut stop = false;
     ui.scope_builder(UiBuilder::new().max_rect(edit_rect), |ui| {
@@ -1393,21 +1522,29 @@ fn composer_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<A
             view.history_idx = Some(idx);
             view.composer = view.sent_history[idx].clone();
         }
-        let resp = ui.add(
-            TextEdit::multiline(&mut view.composer)
-                .id(focused_id)
-                .frame(Frame::NONE)
-                .font(ui_font(13.5))
-                .hint_text(match (busy, edit_rect.width() < 420.0) {
-                    (true, false) => "Steer Copilot or queue a follow-up…",
-                    (true, true) => "Steer or queue…",
-                    (false, false) => "Ask Copilot to build, fix or explain…   (/ for commands)",
-                    (false, true) => "Ask Copilot…",
-                })
-                .desired_width(edit_rect.width())
-                .desired_rows(1)
-                .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter)),
-        );
+        let hint = match (busy, edit_rect.width() < 420.0) {
+            (true, false) => "Steer Copilot, or queue a follow-up…",
+            (true, true) => "Steer or queue…",
+            (false, false) => "Ask Copilot to build, fix or explain anything…",
+            (false, true) => "Ask Copilot…",
+        };
+        egui::ScrollArea::vertical().id_salt(("composer-scroll", view.bay)).max_height(edit_rect.height()).auto_shrink([false, true]).show(ui, |ui| {
+            let resp = ui.add(
+                TextEdit::multiline(&mut view.composer)
+                    .id(edit_id)
+                    .frame(Frame::NONE)
+                    .margin(Margin::ZERO)
+                    .font(ui_font(14.0))
+                    .hint_text(hint)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(if hero { 2 } else { 1 })
+                    .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter)),
+            );
+            if view.focus_composer && cx.focused {
+                resp.request_focus();
+                view.focus_composer = false;
+            }
+        });
         if enter_pressed {
             submitted = true;
             // Strip the newline egui may have inserted on plain Enter.
@@ -1415,13 +1552,9 @@ fn composer_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<A
                 view.composer.pop();
             }
         }
-        if view.focus_composer && cx.focused {
-            resp.request_focus();
-            view.focus_composer = false;
-        }
     });
-    if send_resp.clicked() {
-        if busy && !can_send {
+    if send.clicked() {
+        if stop_mode {
             stop = true;
         } else {
             submitted = true;
@@ -1440,7 +1573,7 @@ fn composer_ui(ui: &mut Ui, view: &mut AgentView, cx: &AgentCtx, out: &mut Vec<A
                 out.push(AgentAction::Send(text));
             }
         }
-        ui.memory_mut(|m| m.request_focus(focused_id));
+        ui.memory_mut(|m| m.request_focus(edit_id));
     }
 }
 

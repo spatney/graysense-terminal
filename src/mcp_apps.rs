@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use wry::dpi::{PhysicalPosition, PhysicalSize};
 use wry::http::{Request, Response};
-use wry::{NewWindowResponse, WebView, WebViewBuilder};
+use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
 use crate::agent::BayId;
 use crate::theme::Theme;
@@ -67,6 +67,9 @@ pub struct AppHost {
     next: u64,
     inbox: Rc<RefCell<Vec<(u64, String)>>>,
     docs: Arc<Mutex<HashMap<u64, Doc>>>,
+    /// WebView2's data folder lives with Graysense's state, not next to the exe: an installed
+    /// copy's program folder is replaced on update, and WebView2 can still hold files there.
+    web_context: WebContext,
 }
 
 fn sanitize(list: Option<&Value>) -> String {
@@ -129,7 +132,13 @@ fn call_tool_result(result: &Value) -> Value {
 
 impl AppHost {
     pub fn new() -> Self {
-        AppHost { views: Vec::new(), next: 1, inbox: Rc::new(RefCell::new(Vec::new())), docs: Arc::new(Mutex::new(HashMap::new())) }
+        AppHost {
+            views: Vec::new(),
+            next: 1,
+            inbox: Rc::new(RefCell::new(Vec::new())),
+            docs: Arc::new(Mutex::new(HashMap::new())),
+            web_context: WebContext::new(Some(crate::settings::config_dir().join("WebView2"))),
+        }
     }
 
     /// Register a new view from a tool result's `uiResource`. Returns the view id.
@@ -205,7 +214,7 @@ impl AppHost {
                 let bg = theme.surface;
                 let built = {
                     use wry::WebViewBuilderExtWindows;
-                    WebViewBuilder::new()
+                    WebViewBuilder::new_with_web_context(&mut self.web_context)
                         .with_focused(false)
                         .with_visible(false)
                         .with_bounds(wry::Rect { position: PhysicalPosition::new(0, 0).into(), size: PhysicalSize::new(1u32, 1u32).into() })

@@ -17,6 +17,7 @@ mod settings;
 mod sysmon;
 mod term;
 mod theme;
+mod update;
 mod win;
 
 use std::sync::Arc;
@@ -24,6 +25,9 @@ use std::sync::Arc;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    // Installer hooks (install, update, uninstall) run and exit here, and an update that was
+    // downloaded but not installed yet is applied before the app starts.
+    velopack::VelopackApp::build().run();
     let startup = app::Startup::from_args();
     init_tracing();
 

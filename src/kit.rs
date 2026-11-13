@@ -64,6 +64,9 @@ pub mod icon {
     pub const CODE: &str = "\u{E943}";
     pub const MORE: &str = "\u{E712}";
     pub const IMAGE: &str = "\u{E8B9}";
+    pub const DOWNLOAD: &str = "\u{E896}";
+    pub const UPDATE: &str = "\u{E777}";
+    pub const ARROW_UP: &str = "\u{E74A}";
 }
 
 /// Flat surface with a 1px border.
@@ -303,55 +306,33 @@ pub fn mini_button_tinted(ui: &mut Ui, text: &str, theme: &Theme, color: Color32
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// The Graysense mark: a rounded square with three "sense" bars.
-pub fn mark(painter: &Painter, center: Pos2, size: f32, theme: &Theme) {
-    let rect = Rect::from_center_size(center, Vec2::splat(size));
-    painter.rect_filled(rect, CornerRadius::same((size * 0.28) as u8), theme.accent);
-    let bw = size * 0.12;
-    let gap = size * 0.08;
-    let heights = [0.34, 0.56, 0.42];
-    let total = 3.0 * bw + 2.0 * gap;
-    for (i, h) in heights.iter().enumerate() {
-        let x = center.x - total * 0.5 + i as f32 * (bw + gap);
-        let bar = Rect::from_min_size(pos2(x, center.y - size * h * 0.5), vec2(bw, size * h));
-        painter.rect_filled(bar, CornerRadius::same((bw * 0.5) as u8), theme.on_accent);
-    }
+/// Graysense's logo (assets\logo-128.png), `size` points square, centered on `center`.
+pub fn mark(painter: &Painter, center: Pos2, size: f32) {
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    painter.image(logo_texture(painter.ctx()).id(), Rect::from_center_size(center, Vec2::splat(size)), uv, Color32::WHITE);
 }
 
-pub fn app_icon() -> egui::IconData {
-    let size = 64usize;
-    let mut rgba = vec![0u8; size * size * 4];
-    let accent = [0x5Bu8, 0x8C, 0xFF];
-    let radius = 18.0f32;
-    let inside = |x: f32, y: f32| -> f32 {
-        // Signed distance to a rounded square of half-size 30.
-        let hx = 30.0 - radius;
-        let qx = (x - 31.5).abs() - hx;
-        let qy = (y - 31.5).abs() - hx;
-        let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
-        outside + qx.max(qy).min(0.0) - radius
-    };
-    let bars = [(20.0, 0.34), (29.0, 0.56), (38.0, 0.42)];
-    for y in 0..size {
-        for x in 0..size {
-            let (fx, fy) = (x as f32, y as f32);
-            let d = inside(fx, fy);
-            let a = (0.5 - d).clamp(0.0, 1.0);
-            let mut c = [accent[0] as f32, accent[1] as f32, accent[2] as f32];
-            for (bx, h) in bars {
-                let half = 32.0 * h;
-                if fx >= bx && fx < bx + 7.0 && (fy - 31.5).abs() < half {
-                    c = [255.0, 255.0, 255.0];
-                }
-            }
-            let i = (y * size + x) * 4;
-            rgba[i] = c[0] as u8;
-            rgba[i + 1] = c[1] as u8;
-            rgba[i + 2] = c[2] as u8;
-            rgba[i + 3] = (a * 255.0) as u8;
-        }
+/// The logo as a texture, uploaded once.
+fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::unique("graysense-logo");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
     }
-    egui::IconData { rgba, width: size as u32, height: size as u32 }
+    let logo = decode_png(include_bytes!("../assets/logo-128.png"));
+    let image = egui::ColorImage::from_rgba_unmultiplied([logo.width as usize, logo.height as usize], &logo.rgba);
+    let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+    let t = ctx.load_texture("graysense-logo", image, options);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}
+
+fn decode_png(bytes: &[u8]) -> egui::IconData {
+    eframe::icon_data::from_png_bytes(bytes).expect("the bundled logo is a valid PNG")
+}
+
+/// The window and taskbar icon.
+pub fn app_icon() -> egui::IconData {
+    decode_png(include_bytes!("../assets/logo-64.png"))
 }
 
 /// Keyboard shortcut hint (e.g. "Ctrl K") drawn as small keycaps.
