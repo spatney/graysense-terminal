@@ -209,7 +209,7 @@ if ($NoUpload) {
 
 # --- Publish.
 Step "Publishing $tag"
-$publish = if ($Draft) { @() } else { @('--publish') }
+$publish = @(if (-not $Draft) { '--publish' })
 Invoke-Vpk upload github --repoUrl "https://github.com/$repo" --token $token --outputDir $OutDir --releaseName "Graysense $Version" --tag $tag --targetCommitish $head @publish
 
 # The GitHub release page also explains how to install.
