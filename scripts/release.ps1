@@ -158,7 +158,7 @@ if (-not $NoUpload) {
 Step "Packaging Graysense $Version$(if (-not $NoSign) { ', signed' })"
 $packArgs = @(
     'pack', '--packId', 'Graysense', '--packVersion', $Version, '--packDir', $app, '--mainExe', 'graysense.exe',
-    '--packTitle', 'Graysense', '--packAuthors', 'Sachin Patney', '--outputDir', $OutDir,
+    '--packTitle', 'Graysense', '--packAuthors', 'Sachin Patney', '--outputDir', $OutDir, '--runtime', 'win-x64',
     '--icon', (Join-Path $root 'assets\graysense.ico'),
     '--splashImage', (Join-Path $root 'assets\installer-splash.png'), '--splashProgressColor', '#7C8CFF',
     '--shortcuts', 'StartMenuRoot',
@@ -176,7 +176,25 @@ Invoke-Vpk @packArgs
 if (-not $NoSign) {
     Step 'Checking signatures'
     $setup = Get-ChildItem $OutDir -Filter '*Setup.exe' | Select-Object -First 1
-    foreach ($file in @($setup.FullName, (Join-Path $app 'graysense.exe'))) {
+    $check = @($setup.FullName)
+    # vpk signs the copies it packages (not the ones in $app): check those, they're what installs.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $full = Get-ChildItem $OutDir -Filter "*-$Version-full.nupkg" | Select-Object -First 1
+    if (-not $full) { Fail "There's no full package for $Version in $OutDir." }
+    $signed = Join-Path $dist 'signed'
+    Remove-Item $signed -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory $signed | Out-Null
+    $zip = [IO.Compression.ZipFile]::OpenRead($full.FullName)
+    try {
+        foreach ($entry in $zip.Entries | Where-Object { $_.FullName -like 'lib/app/*.exe' }) {
+            $out = Join-Path $signed $entry.Name
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $out, $true)
+            $check += $out
+        }
+    } finally {
+        $zip.Dispose()
+    }
+    foreach ($file in $check) {
         $sig = Get-AuthenticodeSignature $file
         if ($sig.Status -ne 'Valid') { Fail "$([IO.Path]::GetFileName($file)) isn't signed ($($sig.Status))." }
         Write-Host "  $([IO.Path]::GetFileName($file)): $($sig.SignerCertificate.Subject)"
