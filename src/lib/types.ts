@@ -30,6 +30,8 @@ export interface AgentDto {
   model: string | null;
   /** Thinking effort chosen for the session (null: the model's default). */
   effort: string | null;
+  /** Context window tier chosen for the session (null: the model's usual window). */
+  contextTier: string | null;
   mode: ModeId;
   status: StatusDto;
   intent: string | null;
@@ -380,6 +382,17 @@ export interface ModelDto {
   /** Thinking effort levels the model offers, least to most (empty: no setting). */
   efforts: string[];
   defaultEffort: string | null;
+  /** Context window sizes the model offers, standard first (empty: it has one size). */
+  contexts: ContextSize[];
+}
+
+export interface ContextSize {
+  /** "default" or "long_context". */
+  tier: string;
+  /** Prompt tokens it holds, when known. */
+  tokens: number | null;
+  /** Tokens cost more than in the standard window. */
+  pricier: boolean;
 }
 
 export interface AppDto {
@@ -448,6 +461,7 @@ export interface Settings {
   zoom: number;
   default_model: string | null;
   default_effort: string | null;
+  default_context: string | null;
   default_auto_approve: boolean;
   shell: string | null;
   sessions_folder: string;
@@ -539,7 +553,7 @@ export type Action =
   /** `queue`: if the agent is mid-turn, wait for the turn to end instead of steering it. */
   | { type: 'send'; bay: BayId; text: string; queue?: boolean }
   | { type: 'abort'; bay: BayId }
-  | { type: 'setModel'; bay: BayId; model: string; effort?: string | null }
+  | { type: 'setModel'; bay: BayId; model: string; effort?: string | null; context?: string | null }
   | { type: 'setMode'; bay: BayId; mode: string }
   | { type: 'rename'; bay: BayId; name: string }
   | { type: 'attach'; bay: BayId; paths: string[] }

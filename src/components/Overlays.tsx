@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { act, captureNote, newAgentIn, newSession, newShell, newShellIn, restartToUpdate, revealMemory, search, setSide, toggleSide } from '../lib/api';
 import { rankNotes } from '../lib/notes';
 import { NoteCapture } from './NoteCapture';
-import { ago, baseName, effortLabel, plural, shortPath } from '../lib/format';
+import { ago, baseName, contextLabel, effortLabel, plural, shortPath } from '../lib/format';
 import { focusComposer, openOverlay, type Overlay, toast, useUi } from '../lib/store';
 import { THEMES } from '../lib/theme';
 import type { SearchHit } from '../lib/types';
@@ -289,6 +289,10 @@ function useCommands(): Command[] {
       for (const e of current?.efforts.length ? ['auto', ...current.efforts] : []) {
         const name = e === 'auto' ? 'Auto' : effortLabel(e);
         cmds.push({ id: `effort-${e}`, label: `Thinking: ${name}${(agent.effort ?? 'auto') === e ? ' (current)' : ''}`, icon: 'lightbulb', group: 'Model', run: () => void act({ type: 'setModel', bay: focused.id, model: current!.id, effort: e }) });
+      }
+      for (const t of current?.contexts.length ? ['auto', ...current.contexts.map((c) => c.tier)] : []) {
+        const size = current!.contexts.find((c) => c.tier === t);
+        cmds.push({ id: `context-${t}`, label: `Context window: ${size ? contextLabel(size) : 'Auto'}${(agent.contextTier ?? 'auto') === t ? ' (current)' : ''}`, icon: 'layers', group: 'Model', run: () => void act({ type: 'setModel', bay: focused.id, model: current!.id, context: t }) });
       }
       for (const m of models) {
         if (m.id === current?.id) continue;

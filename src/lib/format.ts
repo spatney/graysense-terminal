@@ -100,6 +100,19 @@ export function effortLabel(effort: string, short = false): string {
   return effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
+/** A context window's size as models are sold ("200K", "1M", "1.05M"). */
+export function windowSize(tokens: number): string {
+  if (tokens >= 1e6) return `${Number((tokens / 1e6).toFixed(2))}M`;
+  if (tokens >= 1e3) return `${Math.round(tokens / 1e3)}K`;
+  return String(tokens);
+}
+
+/** What a context window option is called: its size, or failing that, its tier. */
+export function contextLabel(size: { tier: string; tokens: number | null }): string {
+  if (size.tokens) return windowSize(size.tokens);
+  return size.tier === 'long_context' ? 'Long' : 'Standard';
+}
+
 /** A model id as people say it ("claude-sonnet-4.5" → "Claude Sonnet 4.5"). */
 export function modelLabel(id: string | null | undefined, models?: { id: string; name: string }[]): string {
   if (!id) return 'Default model';

@@ -434,6 +434,16 @@ function EffortSelect({ value, models }: { value: string | null; models: ModelDt
   );
 }
 
+function ContextSelect({ value }: { value: string | null }) {
+  return (
+    <select className="select" aria-label="Context window" value={value ?? ''} onChange={(e) => void change({ default_context: e.target.value || null })}>
+      <option value="">Each model’s usual window</option>
+      <option value="default">Standard</option>
+      <option value="long_context">Long, on models that have one</option>
+    </select>
+  );
+}
+
 /** The shells found here (saved by id, so each keeps its own arguments), or a command line of your own ("Custom…"). */
 function ShellPicker({ value, shells }: { value: string | null; shells: TerminalShell[] | null }) {
   const current = value?.trim() || null;
@@ -891,6 +901,13 @@ function buildSections({ settings, app, update, shells, memories, toReview }: Ct
           desc: 'How hard new agents think. More is slower but handles harder problems; models without the level use their own default.',
           keywords: 'reasoning effort think high low medium xhigh max',
           below: <EffortSelect value={settings.default_effort} models={app.models} />,
+        },
+        {
+          id: 'context',
+          label: 'Context window',
+          desc: 'How much new agents hold before older work is compacted. Only some models have a long window, and some charge more per token for it.',
+          keywords: 'context window size tokens long 1m compact compaction',
+          below: <ContextSelect value={settings.default_context} />,
         },
         {
           id: 'auto-approve',

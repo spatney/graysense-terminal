@@ -262,6 +262,8 @@ pub struct AgentView {
     pub model: Option<String>,
     /// Reasoning effort chosen for the session (None: the model's default).
     pub effort: Option<String>,
+    /// Context window tier chosen for the session (None: the model's usual window).
+    pub context_tier: Option<String>,
     /// When the message being worked on was sent (event time, ms).
     turn_started: Option<i64>,
     pub mode: Mode,
@@ -427,6 +429,7 @@ impl AgentView {
             title: None,
             model: None,
             effort: None,
+            context_tier: None,
             turn_started: None,
             mode,
             status: Status::Booting,
@@ -644,11 +647,12 @@ impl AgentView {
                 if let Some(cwd) = d.pointer("/context/cwd").and_then(|v| v.as_str()) {
                     self.cwd = PathBuf::from(cwd);
                 }
-                // A session started with a model names it (and its thinking level) here rather
-                // than in a model_change.
+                // A session started with a model names it (and its thinking level and context
+                // window) here rather than in a model_change.
                 if let Some(m) = s(d, "selectedModel") {
                     self.model = Some(m);
                     self.effort = s(d, "reasoningEffort");
+                    self.context_tier = s(d, "contextTier");
                 }
                 if self.status == Status::Booting {
                     self.status = Status::Idle;
@@ -995,6 +999,10 @@ impl AgentView {
                     self.model = Some(m);
                     // Null: the model's own default.
                     self.effort = s(d, "reasoningEffort");
+                    // Left out when the switch kept the window; null when it went back to the usual one.
+                    if d.get("contextTier").is_some() {
+                        self.context_tier = s(d, "contextTier");
+                    }
                 }
             }
             "session.mode_changed" => {
@@ -1004,7 +1012,14 @@ impl AgentView {
             }
             "session.compaction_start" => self.status = Status::Compacting,
             "session.compaction_complete" => {
-                self.notice(Level::Info, "Context compacted to free up space");
+                // Only an applied compaction freed space; a cancelled one (or one with nothing to
+                // compact) changed nothing worth a line.
+                if d.get("success").and_then(Value::as_bool) == Some(false) {
+                    let why = s(d, "error").or_else(|| s(d, "failureReason"));
+                    self.notice(Level::Warn, why.map_or("Couldn't compact the context".into(), |e| format!("Couldn't compact the context: {}", trunc(&e, 160))));
+                } else if s(d, "outcome").is_none_or(|o| o == "applied") {
+                    self.notice(Level::Info, "Context compacted to free up space");
+                }
                 self.status = Status::Thinking;
             }
             "session.task_complete" => {
@@ -1048,6 +1063,30 @@ mod tests {
 
     fn ev_at(id: &str, ty: &str, at: &str, data: Value) -> SessionEvent {
         serde_json::from_value(json!({ "id": id, "timestamp": at, "type": ty, "data": data })).unwrap()
+    }
+
+    #[test]
+    fn the_context_window_survives_switches_that_leave_it_out() {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.apply(&ev("1", "session.start", json!({ "selectedModel": "opus", "reasoningEffort": "high", "contextTier": "long_context" })));
+        assert_eq!(v.context_tier.as_deref(), Some("long_context"));
+        // Changing only the thinking level keeps the window (the event leaves it out)...
+        v.apply(&ev("2", "session.model_change", json!({ "newModel": "opus", "reasoningEffort": "max" })));
+        assert_eq!((v.effort.as_deref(), v.context_tier.as_deref()), (Some("max"), Some("long_context")));
+        // ...and an explicit null goes back to the model's usual window.
+        v.apply(&ev("3", "session.model_change", json!({ "newModel": "opus", "reasoningEffort": "max", "contextTier": null })));
+        assert_eq!(v.context_tier, None);
+    }
+
+    #[test]
+    fn only_a_compaction_that_freed_space_says_so() {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.apply(&ev("1", "session.compaction_complete", json!({ "success": true, "outcome": "applied" })));
+        v.apply(&ev("2", "session.compaction_complete", json!({ "success": true, "outcome": "cancelled" })));
+        v.apply(&ev("3", "session.compaction_complete", json!({ "success": false, "error": "The summarizer timed out" })));
+        let notices: Vec<&str> = v.items.iter().filter_map(|i| if let Item::Notice { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+        assert_eq!(notices, ["Context compacted to free up space", "Couldn't compact the context: The summarizer timed out"]);
+        assert!(matches!(v.items.last(), Some(Item::Notice { level: Level::Warn, .. })));
     }
 
     #[test]

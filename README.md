@@ -31,13 +31,16 @@ signed in (`copilot login`).
   asking, including commands and file changes. Off by default; existing and resumed sessions
   are unchanged. Each session still has its own approval toggle.
 - **Ask / Plan / Autopilot** modes (Shift+Tab), a context meter, Esc to stop, ↑ for earlier
-  messages, and slash commands (`/model`, `/effort`, `/mode`, `/attach`, `/rename`, `/learn`,
-  `/clear`, `/stop`, `/terminal`, `/new`).
+  messages, and slash commands (`/model`, `/effort`, `/context`, `/mode`, `/attach`, `/rename`,
+  `/learn`, `/clear`, `/stop`, `/terminal`, `/new`).
 - **Steer the agent while it works**: Enter sends a message that Copilot reads at its next step,
   without waiting for the turn to finish. Ctrl+Enter queues it for after the turn instead.
-- **A model picker with thinking levels**: models grouped into Powerful, Versatile and Fast, with
-  Auto at the top, and how hard the model thinks (Auto, Low, Medium, High, Extra high, Max, as
-  each model offers them). Change them mid-session, or make them what new sessions start with.
+- **A model picker with thinking levels and context windows**: models grouped into Powerful,
+  Versatile and Fast, with Auto at the top; how hard the model thinks (Auto, Low, Medium, High,
+  Extra high, Max, as each model offers them); and, for models that have a long window, how much
+  the session holds before compacting (Auto, the standard size such as 200K, or the long one
+  such as 1M; the picker says when the long window costs more per token). Change them
+  mid-session, or make them what new sessions start with (Settings > Agents has the defaults).
 - Attach files by dropping them on an agent, with the + button, or `/attach <path>`.
   Type **@** in a message to autocomplete paths from the session folder (the default folder
   before a session has its own folder). Use Up/Down and Tab/Enter to select, navigate folders,

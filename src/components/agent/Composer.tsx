@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { act, completePath, newSession, newShell, pickFiles, pickFolder, savePastedImage } from '../../lib/api';
-import { effortLabel, human } from '../../lib/format';
+import { contextLabel, effortLabel, human } from '../../lib/format';
 import { activeMention, completionQuery, insertMention, mentionedFiles } from '../../lib/mentions';
 import { fileIcon } from '../../lib/notes';
 import { setDraft, toast, useUi } from '../../lib/store';
-import type { BayDto, BayId, DirEntry, ModeId, ModelDto } from '../../lib/types';
+import type { BayDto, BayId, ContextSize, DirEntry, ModeId, ModelDto } from '../../lib/types';
 import { Icon, Seg, showMenu, useAutosize } from '../ui';
 import { ModelPicker, useModelChoice } from './ModelPicker';
 
@@ -25,6 +25,7 @@ interface Slash {
 const SLASH: Slash[] = [
   { name: 'model', args: '<name>', desc: 'Switch the model' },
   { name: 'effort', args: '<level>', desc: 'How hard the agent thinks (low, medium, high…)' },
+  { name: 'context', args: 'auto | <size>', desc: 'How much the agent holds before compacting (e.g. 1M)' },
   { name: 'mode', args: 'ask | plan | autopilot', desc: 'Change how much the agent does alone' },
   { name: 'attach', args: '[path]', desc: 'Attach files to the next message' },
   { name: 'rename', args: '<name>', desc: 'Name this session' },
@@ -69,6 +70,8 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
   const defaultDir = useUi((s) => s.app?.defaultDir ?? '');
   const home = useUi((s) => s.app?.home ?? '');
   const choice = useModelChoice(bay);
+  // The window chosen for this model, when one is (Auto shows nothing).
+  const size = choice.tier ? choice.model?.contexts.find((c) => c.tier === choice.tier) : undefined;
   const [picker, setPicker] = useState<HTMLElement | null>(null);
   const closePicker = useCallback(() => setPicker(null), []);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -174,6 +177,26 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
         const want = m.efforts.find((e, i) => e === a || levels[i] === a || effortLabel(e, true).toLowerCase() === a);
         if (!want) toast('warn', `${choice.label} thinks at ${m.efforts.map((e) => effortLabel(e)).join(', ')}.`);
         else await act({ type: 'setModel', bay: bay.id, model: m.id, effort: want });
+        return true;
+      }
+      case 'context':
+      case 'window': {
+        const m = choice.model;
+        const used = agent?.context && agent.context[1] > 0 ? ` · ${human(agent.context[0])} of ${human(agent.context[1])} tokens used` : '';
+        if (!m?.contexts.length) {
+          toast('info', `${choice.label} has one context window size${used}.`);
+          return true;
+        }
+        const sizes = m.contexts.map((c) => contextLabel(c));
+        if (!arg) {
+          toast('info', `Context window: ${size ? contextLabel(size) : 'Auto'}${used}. Use /context auto | ${sizes.join(' | ')}.`);
+          return true;
+        }
+        const a = arg.toLowerCase().replace(/\s+/g, '');
+        const word = (c: ContextSize) => (c.tier === 'long_context' ? /^(long|long_context|large|max)$/ : /^(standard|normal)$/).test(a);
+        const want = /^(auto|default|usual)$/.test(a) ? 'auto' : m.contexts.find((c, i) => sizes[i].toLowerCase() === a || word(c))?.tier;
+        if (!want) toast('warn', `${choice.label}’s context windows: Auto, ${sizes.join(', ')}.`);
+        else await act({ type: 'setModel', bay: bay.id, model: m.id, context: want });
         return true;
       }
       case 'mode':
@@ -510,13 +533,14 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
           <button
             type="button"
             className={`model-chip${picker ? ' open' : ''}`}
-            data-tip={picker ? undefined : `${choice.name}${choice.effort ? ` · thinking ${effortLabel(choice.effort).toLowerCase()}` : ''}${bay ? '' : ' (for new sessions)'}`}
+            data-tip={picker ? undefined : `${choice.name}${choice.effort ? ` · thinking ${effortLabel(choice.effort).toLowerCase()}` : ''}${size ? ` · ${contextLabel(size)} context window` : ''}${bay ? '' : ' (for new sessions)'}`}
             aria-haspopup="dialog"
             aria-expanded={!!picker}
             onClick={(e) => setPicker(picker ? null : e.currentTarget)}
           >
             <span className="ellipsis">{choice.label}</span>
             {choice.effort && <span className="model-effort">{effortLabel(choice.effort, true)}</span>}
+            {size && <span className="model-ctx">{contextLabel(size)}</span>}
             <Icon name="chevron-down" />
           </button>
           {picker && <ModelPicker anchor={picker} bay={bay} onClose={closePicker} />}

@@ -56,6 +56,27 @@ describe('transcript turns', () => {
     expect(waiting[1].kind === 'agent' && waiting[1].live).toBe(true);
   });
 
+  it('counts a notice that comes again in a turn instead of repeating it', () => {
+    const compacted: ItemDto = { type: 'notice', level: 'info', text: 'Context compacted to free up space' };
+    const items: ItemDto[] = [
+      { type: 'user', text: 'refactor it all', files: [] },
+      compacted,
+      tool('Run the build'),
+      compacted,
+      compacted,
+      { type: 'notice', level: 'warn', text: 'Something else' },
+      compacted,
+    ];
+    const turn = group(items, false, true)[1];
+    if (turn.kind !== 'agent') throw new Error('expected an agent turn');
+    const notices = turn.parts.flatMap((p) => (p.item.type === 'notice' ? [[p.item.text, p.n ?? 1]] : []));
+    expect(notices).toEqual([
+      ['Context compacted to free up space', 3],
+      ['Something else', 1],
+      ['Context compacted to free up space', 1],
+    ]);
+  });
+
   it('hides reasoning when it is turned off', () => {
     const items: ItemDto[] = [
       { type: 'user', text: 'q', files: [] },

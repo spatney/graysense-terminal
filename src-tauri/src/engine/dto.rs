@@ -8,7 +8,7 @@ use std::time::Instant;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::agent::backend::{MarketInfo, MarketPlugin, McpServerInfo, McpToolInfo, ModelInfo, PluginInfo};
+use crate::agent::backend::{ContextSize, MarketInfo, MarketPlugin, McpServerInfo, McpToolInfo, ModelInfo, PluginInfo};
 use crate::agent::forms::Field;
 use crate::agent::{self, AgentView, BayId, Item, Level, Mode, Status, ToolState};
 use crate::memory::{Kind, Memory, Origin, Proposal, Scope, State as MemState};
@@ -474,6 +474,8 @@ pub struct AgentDto {
     pub model: Option<String>,
     /// Thinking effort chosen for the session (null: the model's default).
     pub effort: Option<String>,
+    /// Context window tier chosen for the session (null: the model's usual window).
+    pub context_tier: Option<String>,
     pub mode: &'static str,
     pub status: StatusDto,
     pub intent: Option<String>,
@@ -524,6 +526,7 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         session_id: v.session_id.clone(),
         model: v.model.clone(),
         effort: v.effort.clone(),
+        context_tier: v.context_tier.clone(),
         mode: mode_str(v.mode),
         status: status_dto(&v.status),
         intent: v.intent.clone(),
@@ -897,11 +900,12 @@ pub struct ModelDto {
     pub category: Option<String>,
     pub efforts: Vec<String>,
     pub default_effort: Option<String>,
+    pub contexts: Vec<ContextSize>,
 }
 
 impl From<&ModelInfo> for ModelDto {
     fn from(m: &ModelInfo) -> Self {
-        ModelDto { id: m.id.clone(), name: m.name.clone(), multiplier: m.multiplier, category: m.category.clone(), efforts: m.efforts.clone(), default_effort: m.default_effort.clone() }
+        ModelDto { id: m.id.clone(), name: m.name.clone(), multiplier: m.multiplier, category: m.category.clone(), efforts: m.efforts.clone(), default_effort: m.default_effort.clone(), contexts: m.contexts.clone() }
     }
 }
 

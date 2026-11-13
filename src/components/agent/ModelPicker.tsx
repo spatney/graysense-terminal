@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { act } from '../../lib/api';
-import { effortLabel, modelLabel } from '../../lib/format';
+import { contextLabel, effortLabel, modelLabel } from '../../lib/format';
 import { useUi } from '../../lib/store';
-import type { BayDto, ModelCategory, ModelDto } from '../../lib/types';
+import type { BayDto, ContextSize, ModelCategory, ModelDto } from '../../lib/types';
 import { Icon } from '../ui';
 
 const NO_MODELS: ModelDto[] = [];
@@ -21,30 +21,45 @@ export function effortOf(model: ModelDto | undefined, chosen: string | null): st
   return chosen && model.efforts.includes(chosen) ? chosen : (model.defaultEffort ?? null);
 }
 
+/** The context window a session runs with: the tier chosen when the model offers it, else none (its usual one). */
+export function tierOf(model: ModelDto | undefined, chosen: string | null): string | null {
+  return chosen && model?.contexts.some((c) => c.tier === chosen) ? chosen : null;
+}
+
+/** What a context window option holds and costs ("Long window · 1,000,000 tokens · costs more per token"). */
+export function contextTip(size: ContextSize | undefined): string {
+  if (!size) return "Copilot's usual window for this model";
+  const name = size.tier === 'long_context' ? 'Long window' : 'Standard window';
+  return [name, size.tokens ? `${size.tokens.toLocaleString()} tokens` : '', size.pricier ? 'costs more per token' : ''].filter(Boolean).join(' · ');
+}
+
 /** What a bay's model chip says, and what the picker edits (the defaults, on the home screen). */
 export function useModelChoice(bay: BayDto | null) {
   const models = useUi((s) => s.app?.models ?? NO_MODELS);
   const defaultModel = useUi((s) => s.settings?.default_model ?? null);
   const defaultEffort = useUi((s) => s.settings?.default_effort ?? null);
+  const defaultContext = useUi((s) => s.settings?.default_context ?? null);
   const runtimeModel = useUi((s) => s.app?.runtimeModel ?? null);
   const agent = bay?.agent ?? null;
   // Nothing chosen: sessions start with Copilot's own default, once Graysense has seen which it is.
   const id = (bay ? agent?.model : null) ?? defaultModel ?? runtimeModel;
   const model = models.find((m) => m.id === id);
   const effort = effortOf(model, bay ? (agent?.effort ?? null) : defaultEffort);
+  const tier = tierOf(model, bay ? (agent?.contextTier ?? null) : defaultContext);
   const name = modelLabel(id, models);
   // The chip is tight: "Sonnet 5.5" says it (the picker shows full names).
-  return { models, id, model, effort, name, label: name.replace(/^Claude (?=\S)/, '') };
+  return { models, id, model, effort, tier, name, label: name.replace(/^Claude (?=\S)/, '') };
 }
 
 /**
- * Pick a model and how hard it thinks. For a bay it changes that session; on the home screen
- * it changes what new sessions start with.
+ * Pick a model, how hard it thinks and how much it holds. For a bay it changes that session; on
+ * the home screen it changes what new sessions start with.
  */
 export function ModelPicker({ anchor, bay, onClose }: { anchor: HTMLElement; bay: BayDto | null; onClose: () => void }) {
-  const { models, id, model, effort } = useModelChoice(bay);
+  const { models, id, model, effort, tier } = useModelChoice(bay);
   const defaultModel = useUi((s) => s.settings?.default_model ?? s.app?.runtimeModel ?? null);
   const defaultEffort = useUi((s) => s.settings?.default_effort ?? null);
+  const defaultContext = useUi((s) => s.settings?.default_context ?? null);
   const [query, setQuery] = useState('');
   const [hot, setHot] = useState(-1);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -59,6 +74,9 @@ export function ModelPicker({ anchor, bay, onClose }: { anchor: HTMLElement; bay
   }, [models, q]);
   const flat = useMemo(() => [...(auto ? [auto] : []), ...groups.flatMap((g) => g.models)], [auto, groups]);
   const levels = model?.efforts.length ? ['auto', ...model.efforts] : [];
+  const sizes = model?.contexts.length ? ['auto', ...model.contexts.map((c) => c.tier)] : [];
+  const size = model?.contexts.find((c) => c.tier === tier);
+  const pricier = model?.contexts.some((c) => c.pricier) ?? false;
   // Point at the current model when the list first shows (or after filtering, the first match).
   useEffect(() => {
     byKey.current = true;
@@ -74,7 +92,7 @@ export function ModelPicker({ anchor, bay, onClose }: { anchor: HTMLElement; bay
     const left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
     const above = r.top - h - 8 >= 8 || r.top > window.innerHeight - r.bottom;
     setPos({ left, top: above ? Math.max(8, r.top - h - 8) : Math.min(r.bottom + 8, window.innerHeight - h - 8) });
-  }, [anchor, groups.length, flat.length, !!model?.efforts.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [anchor, groups.length, flat.length, !!model?.efforts.length, !!model?.contexts.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     (searchRef.current ?? ref.current)?.focus();
@@ -114,10 +132,16 @@ export function ModelPicker({ anchor, bay, onClose }: { anchor: HTMLElement; bay
     if (bay) void act({ type: 'setModel', bay: bay.id, model: model.id, effort: e });
     else void act({ type: 'setSettings', changes: { default_effort: e === 'auto' ? null : e } });
   };
-  const isDefault = !!model && model.id === defaultModel && effortOf(model, defaultEffort) === effort;
+  const pickTier = (t: string) => {
+    if (!model) return;
+    // "auto": no override, so the session gets Copilot's usual window for the model.
+    if (bay) void act({ type: 'setModel', bay: bay.id, model: model.id, context: t });
+    else void act({ type: 'setSettings', changes: { default_context: t === 'auto' ? null : t } });
+  };
+  const isDefault = !!model && model.id === defaultModel && effortOf(model, defaultEffort) === effort && tierOf(model, defaultContext) === tier;
   const makeDefault = () => {
     if (!model) return;
-    void act({ type: 'setSettings', changes: { default_model: model.id, default_effort: effort } });
+    void act({ type: 'setSettings', changes: { default_model: model.id, default_effort: effort, default_context: tier } });
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -181,6 +205,45 @@ export function ModelPicker({ anchor, bay, onClose }: { anchor: HTMLElement; bay
             })}
           </div>
           <div className="mp-think-hint">More thinking is slower and uses more of the context window, but handles harder problems.</div>
+        </div>
+      )}
+      {sizes.length > 0 && model && (
+        <div className="mp-think">
+          <div className="mp-think-head">
+            <Icon name="layers" />
+            <span>Context window</span>
+            <span className="grow" />
+            <span className="mp-think-now">{size ? contextLabel(size) : 'Auto'}</span>
+          </div>
+          <div className="mp-levels" role="radiogroup" aria-label="Context window">
+            {sizes.map((t, i) => {
+              const on = t === (tier ?? 'auto');
+              const c = model.contexts.find((x) => x.tier === t);
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  className={`mp-level${on ? ' on' : ''}`}
+                  data-tip={contextTip(c)}
+                  onClick={() => pickTier(t)}
+                >
+                  {!c ? (
+                    <Icon name="sparkle" className="mp-auto" />
+                  ) : (
+                    <span className="mp-bars" aria-hidden>
+                      {sizes.slice(1).map((_, j) => (
+                        <i key={j} className={j < i ? 'lit' : ''} />
+                      ))}
+                    </span>
+                  )}
+                  {c ? contextLabel(c) : 'Auto'}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mp-think-hint">A bigger window holds more of the work before it's compacted{pricier ? ', but costs more per token on this model' : ''}.</div>
         </div>
       )}
       {models.length > 8 && (

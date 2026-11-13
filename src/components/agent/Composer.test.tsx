@@ -28,7 +28,7 @@ vi.mock('../ui', () => ({
 const bay: BayDto = {
   id: 1, kind: 'agent', title: 'Test', cwd: 'C:\\repo', folder: 'repo', shell: null,
   agent: {
-    sessionId: 'test', model: null, effort: null, mode: 'interactive',
+    sessionId: 'test', model: null, effort: null, contextTier: null, mode: 'interactive',
     status: { kind: 'thinking', label: 'Thinking', detail: null, busy: true, attention: false },
     intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
     context: null, toolCount: 0, turns: 0, changedFiles: [], busySince: null, mission: null,

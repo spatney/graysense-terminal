@@ -9,7 +9,13 @@ import { PromptCard, isPrompt } from './Prompts';
 
 // ------------------------------------------------------------------ grouping
 
-type Part = { t: 'step' | 'note' | 'prompt' | 'notice' | 'memory'; i: number; item: ItemDto };
+type Part = {
+  t: 'step' | 'note' | 'prompt' | 'notice' | 'memory';
+  i: number;
+  item: ItemDto;
+  /** How many times a notice came in a row (it shows once, counted). */
+  n?: number;
+};
 
 interface AgentTurn {
   kind: 'agent';
@@ -73,9 +79,13 @@ export function group(items: ItemDto[], busy: boolean, showReasoning: boolean): 
         narrate(t);
         t.parts.push({ t: 'step', i, item });
         return;
-      case 'notice':
-        t.parts.push({ t: 'notice', i, item });
+      case 'notice': {
+        // A long turn can compact its context several times: a notice that comes again is counted, not repeated.
+        const prev = t.parts.findLast((p) => p.t === 'notice');
+        if (prev?.item.type === 'notice' && prev.item.text === item.text && prev.item.level === item.level) prev.n = (prev.n ?? 1) + 1;
+        else t.parts.push({ t: 'notice', i, item });
         return;
+      }
       case 'memory':
       case 'recall':
         t.parts.push({ t: 'memory', i, item });
@@ -433,12 +443,13 @@ function MemoryChip({ bay, i, item }: { bay: number; i: number; item: MemoryItem
   );
 }
 
-function Notice({ item }: { item: NoticeItem }) {
+function Notice({ item, count = 1 }: { item: NoticeItem; count?: number }) {
   const icon = { info: 'info', ok: 'pass', warn: 'warning', error: 'error' }[item.level];
   return (
     <div className={`notice ${item.level} selectable`}>
       <Icon name={icon} />
       <span>{item.text}</span>
+      {count > 1 && <span className="notice-count">×{count}</span>}
     </div>
   );
 }
@@ -461,7 +472,7 @@ const sameTurn = (a: AgentTurnProps, b: AgentTurnProps) =>
   a.turn.took === b.turn.took &&
   a.turn.answer?.item === b.turn.answer?.item &&
   a.turn.parts.length === b.turn.parts.length &&
-  a.turn.parts.every((p, i) => p.item === b.turn.parts[i].item && p.t === b.turn.parts[i].t);
+  a.turn.parts.every((p, i) => p.item === b.turn.parts[i].item && p.t === b.turn.parts[i].t && p.n === b.turn.parts[i].n);
 
 const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionId, sessionTitle }: AgentTurnProps) {
   const now = useNow(turn.live);
@@ -500,7 +511,7 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
         </div>
       )}
       {notices.map((p) => (
-        <Notice key={p.i} item={p.item as NoticeItem} />
+        <Notice key={p.i} item={p.item as NoticeItem} count={p.n} />
       ))}
       {changed.length > 0 && <FileChips files={changed} />}
       {memories.map((p) => (

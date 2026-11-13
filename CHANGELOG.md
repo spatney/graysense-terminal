@@ -3,6 +3,17 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.2.2 — 2026-11-13
+
+- **Choose the context window**: for models that have a long window (such as 1M tokens on Claude
+  Opus), the model picker now has a Context window row beside Thinking: Auto, the standard size
+  or the long one. It applies mid-session, the picker says when the long window costs more per
+  token, and the chip shows the size you chose. Set what new sessions start with in Settings >
+  Agents, or type `/context 1m` (`/context` alone shows how full the window is).
+- **No more stacks of "Context compacted"**: when a long turn compacts its context several times,
+  the notice shows once with a count (×3). A compaction that fails now says so instead of
+  claiming it freed space.
+
 ## 0.2.1 — 2026-11-13
 
 - **Open in VS Code from the Files panel**: a button beside Refresh opens the folder you're

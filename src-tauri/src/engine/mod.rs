@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::agent::backend::{AgentSpec, Backend, ClientState, Cmd, EffortChange, Evt, MarketInfo, MarketPlugin, McpCmd, McpServerInfo, McpToolInfo, ModelInfo, PluginCmd, PluginInfo, SessionInfo, UiTx};
+use crate::agent::backend::{AgentSpec, Backend, Change, ClientState, Cmd, Evt, MarketInfo, MarketPlugin, McpCmd, McpServerInfo, McpToolInfo, ModelInfo, PluginCmd, PluginInfo, SessionInfo, UiTx};
 use crate::agent::{AgentView, AppTab, BayId, Effect, Item, Level, Mode, Status};
 use crate::canvas::CanvasInstance;
 use crate::memory::{MemoryStore, Origin, Project, Scope, Source, State as MemoryState};
@@ -502,6 +502,9 @@ impl Core {
         view.mission = mission;
         view.session_id = resume.clone();
         view.incognito = incognito;
+        if resume.is_none() {
+            view.context_tier = self.settings.default_context.clone();
+        }
         if let Some(meta) = resume.as_deref().and_then(|r| self.session_index.get(r)) {
             view.name = meta.name.clone();
         }
@@ -563,6 +566,7 @@ impl Core {
         view.status = Status::Idle;
         view.model = self.settings.default_model.clone();
         view.effort = self.settings.default_effort.clone();
+        view.context_tier = self.settings.default_context.clone();
         self.push_bay(Bay { id, kind: BayKind::Agent(Box::new(view)) });
         if self.models.is_empty() {
             self.backend.send(Cmd::ListModels);
@@ -622,10 +626,13 @@ impl Core {
         // Choices made before the session existed (a deferred one) carry over.
         let model = view.model.clone().or_else(|| self.settings.default_model.clone());
         let effort = self.effort_for(model.as_deref().or(self.runtime_model.as_deref()), view.effort.clone().or_else(|| self.settings.default_effort.clone()));
+        // New views start with the default window, so "Auto" chosen for this one session stays Auto.
+        let context_tier = self.tier_for(model.as_deref().or(self.runtime_model.as_deref()), view.context_tier.clone());
         AgentSpec {
             cwd: view.cwd.clone(),
             model,
             effort,
+            context_tier,
             mode: view.mode,
             prompt,
             files,
@@ -642,14 +649,22 @@ impl Core {
         effort_for(&self.models, model, wanted)
     }
 
+    /// The context window tier to ask model for: the one wanted when the model offers it, else
+    /// None (the model's usual window).
+    pub fn tier_for(&self, model: Option<&str>, wanted: Option<String>) -> Option<String> {
+        tier_for(&self.models, model, wanted)
+    }
+
     /// A restored session that no longer exists continues as a fresh agent in the same folder.
     fn restart_fresh(&mut self, bay: BayId) -> bool {
+        let tier = self.settings.default_context.clone();
         let Some(v) = self.agent_mut(bay) else { return false };
         if v.session_id.is_none() {
             return false;
         }
         v.items.retain(|i| !matches!(i, Item::Notice { text, .. } if text == "Resuming session…"));
         v.session_id = None;
+        v.context_tier = tier;
         v.learn_cursor = 0;
         v.notice(Level::Info, "That session is no longer available, so this is a new one.");
         let Some(v) = self.agent(bay) else { return false };
@@ -976,12 +991,14 @@ impl Core {
                     && let Some(m) = ev.data.get("newModel").and_then(Value::as_str)
                 {
                     self.runtime_model = Some(m.to_owned());
-                    // It couldn't be given its thinking level before the model was known.
-                    let wanted = self.agent(bay).and_then(|v| v.effort.clone());
-                    if ev.data.get("reasoningEffort").is_none_or(Value::is_null)
-                        && let Some(e) = self.effort_for(Some(m), wanted)
-                    {
-                        self.backend.send(Cmd::SetModel { bay, model: m.to_owned(), effort: EffortChange::Set(e) });
+                    // It couldn't be given its thinking level or context window before the model was known.
+                    let unset = |key: &str| ev.data.get(key).is_none_or(Value::is_null);
+                    let v = self.agent(bay);
+                    let effort = if unset("reasoningEffort") { self.effort_for(Some(m), v.and_then(|v| v.effort.clone())) } else { None };
+                    let tier = if unset("contextTier") { self.tier_for(Some(m), v.and_then(|v| v.context_tier.clone())) } else { None };
+                    if effort.is_some() || tier.is_some() {
+                        let set = |x: Option<String>| x.map_or(Change::Keep, Change::Set);
+                        self.backend.send(Cmd::SetModel { bay, model: m.to_owned(), effort: set(effort), tier: set(tier) });
                     }
                 }
                 let effects = match self.agent_mut(bay) {
@@ -1493,6 +1510,13 @@ fn effort_for(models: &[ModelInfo], model: Option<&str>, wanted: Option<String>)
     if info.efforts.contains(&wanted) { Some(wanted) } else { info.default_effort.clone() }
 }
 
+/// See [`Core::tier_for`].
+fn tier_for(models: &[ModelInfo], model: Option<&str>, wanted: Option<String>) -> Option<String> {
+    let wanted = wanted?;
+    let info = models.iter().find(|m| Some(m.id.as_str()) == model)?;
+    info.contexts.iter().any(|c| c.tier == wanted).then_some(wanted)
+}
+
 /// The id of a terminal bay's shell in [`Terminals`].
 pub fn terminal_id(bay: BayId) -> String {
     format!("bay-{bay}")
@@ -1606,6 +1630,7 @@ mod tests {
             category: None,
             efforts: efforts.iter().map(|e| e.to_string()).collect(),
             default_effort: default.map(str::to_owned),
+            contexts: Vec::new(),
         };
         let models = [model("opus", &["low", "medium", "high", "max"], Some("medium")), model("mini", &[], None)];
         let want = |e: &str| Some(e.to_owned());
@@ -1616,5 +1641,20 @@ mod tests {
         // Unknown models, or nothing chosen, leave it to the runtime.
         assert_eq!(effort_for(&models, Some("new-model"), want("high")), None);
         assert_eq!(effort_for(&models, Some("opus"), None), None);
+    }
+
+    #[test]
+    fn a_long_context_window_is_only_asked_of_models_that_have_one() {
+        use crate::agent::backend::ContextSize;
+        let size = |tier: &str, tokens: i64| ContextSize { tier: tier.into(), tokens: Some(tokens), pricier: false };
+        let model = |id: &str, contexts: Vec<ContextSize>| ModelInfo { id: id.into(), name: id.into(), multiplier: None, category: None, efforts: Vec::new(), default_effort: None, contexts };
+        let models = [model("opus", vec![size("default", 200_000), size("long_context", 1_000_000)]), model("haiku", Vec::new())];
+        let want = |t: &str| Some(t.to_owned());
+        assert_eq!(tier_for(&models, Some("opus"), want("long_context")), want("long_context"));
+        assert_eq!(tier_for(&models, Some("opus"), want("default")), want("default"));
+        // The runtime would accept a long window for any model, so Graysense mustn't ask for one it lacks.
+        assert_eq!(tier_for(&models, Some("haiku"), want("long_context")), None);
+        assert_eq!(tier_for(&models, Some("new-model"), want("long_context")), None);
+        assert_eq!(tier_for(&models, Some("opus"), None), None);
     }
 }

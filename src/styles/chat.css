@@ -284,6 +284,13 @@
   color: var(--ok);
 }
 
+/* How many times the same notice came in the turn ("Context compacted to free up space ×3"). */
+.notice-count {
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Memory chips under an answer. */
 .memory-chip {
   align-self: flex-start;
@@ -971,8 +978,9 @@ button.file-chip:hover {
   color: var(--text);
 }
 
-/* The thinking level beside the model's name ("Sonnet 5.5  High"). */
-.model-effort {
+/* The thinking level and chosen context window beside the model's name ("Sonnet 5.5  High  1M"). */
+.model-effort,
+.model-ctx {
   flex: none;
   padding: 0 5px;
   border-radius: 4px;
@@ -983,8 +991,14 @@ button.file-chip:hover {
   line-height: 16px;
 }
 
+.model-ctx {
+  background: color-mix(in srgb, var(--text-dim) 16%, transparent);
+  color: var(--text-dim);
+}
+
 @container chat (max-width: 400px) {
-  .model-effort {
+  .model-effort,
+  .model-ctx {
     display: none;
   }
 }

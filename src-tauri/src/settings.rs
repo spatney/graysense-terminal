@@ -64,6 +64,8 @@ pub struct Settings {
     pub default_model: Option<String>,
     /// Thinking effort new agents start with (None: each model's own default).
     pub default_effort: Option<String>,
+    /// Context window tier new agents start with on models that offer it (None: each model's usual window).
+    pub default_context: Option<String>,
     /// New sessions approve all tool calls unless the user switches it off for that session.
     pub default_auto_approve: bool,
     /// Custom shell program for terminal bays (defaults to pwsh, then powershell).
@@ -129,6 +131,7 @@ impl Default for Settings {
             recent_dirs: Vec::new(),
             default_model: None,
             default_effort: None,
+            default_context: None,
             default_auto_approve: false,
             shell: None,
             show_reasoning: true,
@@ -196,6 +199,7 @@ impl Settings {
         add("zoom", json!(self.zoom), json!("number from 0.7 to 1.6"), "Interface zoom (1 = 100%).");
         add("default_model", json!(self.default_model), model_choice.clone(), "Model new agents start with.");
         add("default_effort", json!(self.default_effort), json!({ "one_of": EFFORTS, "or": "null for each model's default" }), "How hard new agents think (reasoning effort). Models that don't offer the level use their default.");
+        add("default_context", json!(self.default_context), json!({ "one_of": CONTEXT_TIERS, "or": "null for each model's usual window" }), "Context window new agents start with: \"default\" (standard) or \"long_context\" (larger, e.g. 1M tokens; can cost more per token). Models with one size ignore it.");
         add("default_auto_approve", json!(self.default_auto_approve), json!("boolean"), "Approve all tool calls in new sessions without asking, including commands and file changes. Existing and resumed sessions are unchanged; each new session can override this.");
         add("shell", json!(self.shell), json!("a shell id (pwsh, powershell, cmd, git-bash, wsl), a program or command line, or null for the default"), "Shell that new terminal bays run.");
         add("sessions_folder", json!(self.sessions_root().display().to_string()), json!("absolute folder path, or null for ~\\Graysense\\Sessions"), "Where new sessions get their own folders.");
@@ -260,6 +264,14 @@ impl Settings {
                         Some(EFFORTS.contains(&e.as_str()).then_some(e).ok_or_else(bad)?)
                     }
                 }
+                "default_context" => {
+                    next.default_context = if v.is_null() {
+                        None
+                    } else {
+                        let t = text()?.to_ascii_lowercase();
+                        Some(CONTEXT_TIERS.contains(&t.as_str()).then_some(t).ok_or_else(bad)?)
+                    }
+                }
                 "shell" => next.shell = if v.is_null() { None } else { Some(text()?) },
                 "sessions_folder" => {
                     next.sessions_root = if v.is_null() {
@@ -290,6 +302,9 @@ impl Settings {
 
 /// Reasoning effort levels, least to most (models offer some of them).
 pub const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Context window tiers: the standard window and the long one some models offer.
+pub const CONTEXT_TIERS: [&str; 2] = ["default", "long_context"];
 
 /// Settings an agent may change without asking: appearance and layout only.
 pub const SAFE_KEYS: &[&str] = &["theme", "terminal_font_size", "layout", "side_panel", "side_panel_width", "show_reasoning", "cursor_blink", "performance_hud", "zoom"];
@@ -420,6 +435,17 @@ mod tests {
         assert!(settings.apply_patch(changes.as_object().unwrap(), &[]).is_err());
         assert!(!settings.default_auto_approve);
         assert!(settings.cursor_blink);
+    }
+
+    #[test]
+    fn the_default_context_window_takes_a_tier_or_null() {
+        let mut settings = Settings::default();
+        settings.apply_patch(json!({ "default_context": "long_context" }).as_object().unwrap(), &[]).unwrap();
+        assert_eq!(settings.values()["default_context"], "long_context");
+        // A size isn't a tier: each model's windows have their own sizes.
+        assert!(settings.apply_patch(json!({ "default_context": "1M" }).as_object().unwrap(), &[]).is_err());
+        settings.apply_patch(json!({ "default_context": null }).as_object().unwrap(), &[]).unwrap();
+        assert_eq!(settings.default_context, None);
     }
 
     #[test]

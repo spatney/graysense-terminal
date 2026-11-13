@@ -22,7 +22,7 @@ use github_copilot_sdk::rpc::{
     PluginsUninstallRequest, PluginsUpdateRequest,
 };
 use github_copilot_sdk::session::Session;
-use github_copilot_sdk::session_events::SessionMode;
+use github_copilot_sdk::session_events::{ContextTier, SessionMode};
 use github_copilot_sdk::subscription::RecvErrorKind;
 use github_copilot_sdk::tool::ToolHandler;
 use github_copilot_sdk::{
@@ -56,6 +56,8 @@ pub struct AgentSpec {
     pub model: Option<String>,
     /// Reasoning effort for a new session (None: the model's default).
     pub effort: Option<String>,
+    /// Context window tier for a new session ("default" or "long_context"; None: the model's usual one).
+    pub context_tier: Option<String>,
     pub mode: Mode,
     pub prompt: Option<String>,
     /// Files attached to `prompt`.
@@ -68,9 +70,9 @@ pub struct AgentSpec {
     pub memory: Option<AgentMemory>,
 }
 
-/// What a model switch does to the session's thinking effort.
+/// What a model switch does to one of the session's settings (thinking effort, context window).
 #[derive(Clone, Debug, PartialEq)]
-pub enum EffortChange {
+pub enum Change {
     /// Leave it as it is.
     Keep,
     /// Drop the override: the model's own default.
@@ -91,7 +93,7 @@ pub enum Cmd {
     /// `steer`: if the agent is mid-turn, it reads the message at its next step instead of after the turn.
     Send { bay: BayId, text: String, files: Vec<PathBuf>, steer: bool },
     Abort { bay: BayId },
-    SetModel { bay: BayId, model: String, effort: EffortChange },
+    SetModel { bay: BayId, model: String, effort: Change, tier: Change },
     SetMode { bay: BayId, mode: Mode },
     Close { bay: BayId },
     ListModels,
@@ -157,6 +159,45 @@ pub struct ModelInfo {
     /// Reasoning effort levels the model offers (none when it has no setting).
     pub efforts: Vec<String>,
     pub default_effort: Option<String>,
+    /// Context window sizes the model offers, standard first (none when it has one size).
+    pub contexts: Vec<ContextSize>,
+}
+
+/// A context window size a model offers.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSize {
+    /// "default" or "long_context".
+    pub tier: String,
+    /// Prompt tokens it holds, when the runtime says.
+    pub tokens: Option<i64>,
+    /// Tokens cost more than in the standard window.
+    pub pricier: bool,
+}
+
+/// The context sizes a listed model offers: the standard and long windows when it has a long one.
+fn context_sizes(m: &github_copilot_sdk::rpc::Model) -> Vec<ContextSize> {
+    let prices = m.billing.as_ref().and_then(|b| b.token_prices.as_ref());
+    let long = prices.and_then(|p| p.long_context.as_ref());
+    let listed = m.supported_context_tiers.as_ref().is_some_and(|t| t.iter().any(|t| t == "long_context"));
+    if long.is_none() && !listed {
+        return Vec::new();
+    }
+    let more = |a: Option<f64>, b: Option<f64>| matches!((a, b), (Some(long), Some(std)) if long > std);
+    let pricier = long.is_some_and(|l| more(l.input_price, prices.and_then(|p| p.input_price)) || more(l.output_price, prices.and_then(|p| p.output_price)));
+    vec![
+        ContextSize { tier: "default".into(), tokens: prices.and_then(|p| p.max_prompt_tokens), pricier: false },
+        ContextSize { tier: "long_context".into(), tokens: long.and_then(|l| l.max_prompt_tokens), pricier },
+    ]
+}
+
+/// The SDK's name for a context tier Graysense offers.
+fn sdk_tier(tier: &str) -> Option<ContextTier> {
+    match tier {
+        "default" => Some(ContextTier::Default),
+        "long_context" => Some(ContextTier::LongContext),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -444,18 +485,24 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     let _ = s.abort().await;
                 });
             }
-            Cmd::SetModel { bay, model, effort } => {
+            Cmd::SetModel { bay, model, effort, tier } => {
                 let s = sessions[&bay].clone();
                 let c = client.clone().unwrap();
                 let ui = ui.clone();
                 tokio::spawn(async move {
-                    let reasoning_effort = if let EffortChange::Set(e) = &effort { Some(e.clone()) } else { None };
-                    let req = ModelSwitchToRequest { model_id: model.clone(), reasoning_effort, ..Default::default() };
-                    let r = if effort == EffortChange::Clear {
-                        // The typed request leaves out an empty effort ("keep it"); clearing needs an explicit null.
+                    let reasoning_effort = if let Change::Set(e) = &effort { Some(e.clone()) } else { None };
+                    let context_tier = if let Change::Set(t) = &tier { sdk_tier(t) } else { None };
+                    let req = ModelSwitchToRequest { model_id: model.clone(), reasoning_effort, context_tier, ..Default::default() };
+                    let r = if effort == Change::Clear || tier == Change::Clear {
+                        // The typed request leaves out empty fields ("keep it"); clearing needs an explicit null.
                         let mut params = serde_json::to_value(&req).unwrap_or_else(|_| json!({}));
                         params["sessionId"] = json!(s.id().to_string());
-                        params["reasoningEffort"] = Value::Null;
+                        if effort == Change::Clear {
+                            params["reasoningEffort"] = Value::Null;
+                        }
+                        if tier == Change::Clear {
+                            params["contextTier"] = Value::Null;
+                        }
                         c.call("session.model.switchTo", Some(params)).await.map(|_| ())
                     } else {
                         s.rpc().model().switch_to(req).await.map(|_| ())
@@ -525,6 +572,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                                         Some(ModelPickerCategory::Lightweight) => Some("lightweight".into()),
                                         _ => None,
                                     },
+                                    contexts: context_sizes(&m),
                                     efforts: m.supported_reasoning_efforts.unwrap_or_default(),
                                     default_effort: m.default_reasoning_effort,
                                     id: m.id,
@@ -668,6 +716,9 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
         }
         if let Some(effort) = spec.effort.clone() {
             config = config.with_reasoning_effort(effort);
+        }
+        if let Some(tier) = spec.context_tier.clone() {
+            config = config.with_context_tier(tier);
         }
         client.prepare_session(config).map_err(|e| e.to_string())?
     };

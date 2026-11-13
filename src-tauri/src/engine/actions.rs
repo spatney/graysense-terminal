@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{BayKind, Core};
-use crate::agent::backend::{AppCmd, Cmd, EffortChange, McpCmd, PluginCmd};
+use crate::agent::backend::{AppCmd, Change, Cmd, McpCmd, PluginCmd};
 use crate::agent::{BayId, Item, Level, Mode, PermDecision};
 use crate::memory::{Origin, Scope, State as MemoryState};
 use crate::missions::Status as MissionStatus;
@@ -31,12 +31,15 @@ pub enum Action {
     /// `queue`: if the agent is mid-turn, wait for the turn to end instead of steering it.
     Send { bay: BayId, text: String, #[serde(default)] queue: bool },
     Abort { bay: BayId },
-    /// Switch model and/or thinking effort (ffort left out keeps the current one when the model offers it).
+    /// Switch model, thinking effort and/or context window (one left out keeps the current one when the model offers it).
     SetModel {
         bay: BayId,
         model: String,
         #[serde(default)]
         effort: Option<String>,
+        /// "default" or "long_context"; "auto" for the model's usual window.
+        #[serde(default)]
+        context: Option<String>,
     },
     SetMode { bay: BayId, mode: String },
     Rename { bay: BayId, name: String },
@@ -217,23 +220,28 @@ impl Core {
                 }
                 ok
             }
-            Action::SetModel { bay, model, effort } => {
+            Action::SetModel { bay, model, effort, context } => {
                 let v = self.agent(bay).ok_or("That agent is closed.")?;
-                // "auto" (or "") asks for the model's own default; leaving it out keeps the current level.
-                let clear = matches!(effort.as_deref().map(str::trim), Some("auto" | ""));
+                // "auto" (or "") asks for the model's own default; leaving it out keeps the current one.
+                let auto = |x: &Option<String>| matches!(x.as_deref().map(str::trim), Some("auto" | ""));
+                let (clear, clear_tier) = (auto(&effort), auto(&context));
                 let wanted = if clear { None } else { effort.or_else(|| v.effort.clone()) };
+                let wanted_tier = if clear_tier { None } else { context.or_else(|| v.context_tier.clone()) };
                 let resolved = self.effort_for(Some(&model), wanted.clone());
-                let change = match &resolved {
-                    Some(e) => EffortChange::Set(e.clone()),
-                    // A level the new model doesn't offer mustn't linger either.
-                    None if clear || wanted.is_some() => EffortChange::Clear,
-                    None => EffortChange::Keep,
+                let tier = self.tier_for(Some(&model), wanted_tier.clone());
+                // A setting the new model doesn't offer mustn't linger either.
+                let change = |got: &Option<String>, clear: bool, wanted: bool| match got {
+                    Some(x) => Change::Set(x.clone()),
+                    None if clear || wanted => Change::Clear,
+                    None => Change::Keep,
                 };
+                let (effort, tier_change) = (change(&resolved, clear, wanted.is_some()), change(&tier, clear_tier, wanted_tier.is_some()));
                 let v = self.agent_mut(bay).ok_or("That agent is closed.")?;
                 v.model = Some(model.clone());
                 v.effort = resolved;
+                v.context_tier = tier;
                 if !v.deferred {
-                    self.backend.send(Cmd::SetModel { bay, model, effort: change });
+                    self.backend.send(Cmd::SetModel { bay, model, effort, tier: tier_change });
                 }
                 ok
             }
