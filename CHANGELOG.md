@@ -3,6 +3,16 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.2.1 — 2026-11-13
+
+- **Open in VS Code from the Files panel**: a button beside Refresh opens the folder you're
+  looking at in VS Code, and the folders in its path now have the same right-click menu as the
+  files and folders below them.
+- **No more text spilling out of the work log**: a long answer to an agent's question or form now
+  ends with "…" at the edge of the conversation; hover it to read the whole answer. In narrow
+  panels, a long step name at the top of a running work log is shortened the same way, so the
+  timer and step count stay on one line.
+
 ## 0.2.0 — 2026-11-13
 
 - **Steer Copilot while it works**: press Enter while an agent is busy and Copilot reads your

@@ -75,7 +75,8 @@ signed in (`copilot login`).
   activity feed. Sessions started in the Copilot CLI are listed too.
 - **Search everything** (Ctrl+K): notes, session names and conversations, and the contents of every
   file in your sessions folder, with highlighted snippets and line numbers.
-- Each agent has a side panel with its **files**, the **changes** it made, and any canvases or apps.
+- Each agent has a side panel with its **files** (open the folder in VS Code from there), the
+  **changes** it made, and any canvases or apps.
 
 **Bays and terminals**
 - Tile agents and terminals in a grid, columns, rows or one at a time; drag tabs to reorder;

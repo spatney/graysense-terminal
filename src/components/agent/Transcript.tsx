@@ -249,6 +249,7 @@ function Step({ part, now }: { part: Part; now: number }) {
   let label = '';
   let target: string | null = null;
   let meta: string | null = null;
+  let metaTip: string | undefined;
   let state: 'running' | 'ok' | 'failed' = 'ok';
   let detail: React.ReactNode = null;
   let sub: React.ReactNode = null;
@@ -290,11 +291,13 @@ function Step({ part, now }: { part: Part; now: number }) {
       icon = 'question';
       label = it.question.split('\n')[0];
       meta = it.outcome;
+      metaTip = it.outcome ?? undefined;
       break;
     case 'elicit':
       icon = 'edit';
       label = it.message.split('\n')[0];
       meta = it.outcome;
+      metaTip = it.outcome ?? undefined;
       break;
     case 'plan':
       icon = 'checklist';
@@ -318,7 +321,7 @@ function Step({ part, now }: { part: Part; now: number }) {
         <span className="step-ico">{state === 'running' ? <span className="spinner sm" /> : <Icon name={state === 'failed' ? 'error' : icon} />}</span>
         <span className="step-label">{label}</span>
         <span className="step-target">{target}</span>
-        {meta && <span className="step-meta">{meta}</span>}
+        {meta && <span className="step-meta" data-tip={metaTip}>{meta}</span>}
         {detail && <Icon name="chevron-right" className="step-caret" />}
       </button>
       {sub}

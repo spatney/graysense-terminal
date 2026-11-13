@@ -404,18 +404,24 @@ function FilesView({ bay }: { bay: BayDto }) {
   return (
     <div className="dock-body">
       <div className="files-crumbs">
-        <button type="button" onClick={() => setDir(root)}>
+        <button type="button" onClick={() => setDir(root)} onContextMenu={(ev) => fileMenu(ev, bay.id, root, true)}>
           <Icon name="root-folder" /> {baseName(root)}
         </button>
-        {rel.map((part, i) => (
-          <span key={i} className="row" style={{ gap: 2 }}>
-            <Icon name="chevron-right" className="faint" />
-            <button type="button" onClick={() => setDir(`${root}\\${rel.slice(0, i + 1).join('\\')}`)}>
-              {part}
-            </button>
-          </span>
-        ))}
+        {rel.map((part, i) => {
+          const at = `${root}\\${rel.slice(0, i + 1).join('\\')}`;
+          return (
+            <span key={i} className="row" style={{ gap: 2 }}>
+              <Icon name="chevron-right" className="faint" />
+              <button type="button" onClick={() => setDir(at)} onContextMenu={(ev) => fileMenu(ev, bay.id, at, true)}>
+                {part}
+              </button>
+            </span>
+          );
+        })}
         <span className="grow" />
+        <button type="button" data-tip="Open this folder in VS Code" aria-label="Open this folder in VS Code" onClick={() => void act({ type: 'openInVsCode', path: dir })}>
+          <Icon name="vscode" />
+        </button>
         <button type="button" data-tip="Refresh" onClick={() => setTick((t) => t + 1)}>
           <Icon name="refresh" />
         </button>
