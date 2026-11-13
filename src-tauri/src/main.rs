@@ -47,7 +47,7 @@ fn main() {
     #[cfg(all(windows, not(debug_assertions)))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
         let startup = engine::Startup::parse(args.into_iter().skip(1), Some(std::path::Path::new(&cwd)));
-        if let Some(window) = app.get_window("main") {
+        if let Some(window) = app.get_webview_window("main") {
             let _ = window.unminimize();
             let _ = window.set_focus();
         }
