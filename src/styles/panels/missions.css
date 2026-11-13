@@ -1,0 +1,746 @@
+/* Missions: an idea board. Capture ideas, then launch them or drag one onto an agent. */
+
+.msn-head-count {
+  padding-right: 6px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.msn-toolbar {
+  gap: 6px;
+}
+
+/* ------------------------------------------------------------------ capture */
+
+.msn-capture {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--elev);
+  box-shadow: var(--shadow-sm);
+  cursor: text;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.msn-capture:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    var(--shadow-sm);
+}
+
+.msn-capture-input {
+  display: block;
+  width: 100%;
+  min-height: 50px;
+  max-height: 220px;
+  padding: 10px 12px 2px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  user-select: text;
+}
+
+.msn-capture-input:focus-visible {
+  outline: none;
+}
+
+.msn-capture-input::placeholder {
+  color: var(--text-faint);
+}
+
+.msn-capture-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 6px;
+  cursor: default;
+}
+
+.msn-folder {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: calc(100% - 40px);
+  height: 26px;
+  border-radius: 8px;
+  color: var(--text-faint);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.msn-folder:hover {
+  background: var(--hover);
+  color: var(--text-dim);
+}
+
+.msn-folder.on {
+  background: var(--elev-2);
+  color: var(--text-dim);
+}
+
+.msn-folder.on:hover {
+  background: var(--elev-3);
+  color: var(--text);
+}
+
+.msn-folder-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.msn-folder.on .msn-folder-pick {
+  padding-right: 3px;
+}
+
+.msn-folder-pick .codicon {
+  font-size: 13px;
+}
+
+.msn-folder-clear {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin-right: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-faint);
+}
+
+.msn-folder-clear:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.msn-folder-clear .codicon {
+  font-size: 12px;
+}
+
+.msn-keyhint {
+  margin-left: auto;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  animation: fadeIn 0.15s ease both;
+}
+
+.msn-keyhint + .msn-add {
+  margin-left: 0;
+}
+
+.msn-add {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  transition:
+    background 0.15s ease,
+    transform 0.1s ease;
+}
+
+.msn-add .codicon {
+  font-size: 15px;
+}
+
+.msn-add:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-strong) 85%, white);
+}
+
+.msn-add:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.msn-add:disabled {
+  background: var(--elev-3);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.msn-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding-left: 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+  animation: fadeIn 0.2s ease both;
+}
+
+.msn-hint > .codicon {
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.msn-hint .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+.msn-hint .icon-btn .codicon {
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ sections */
+
+.msn-sec {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.msn-sec:focus-visible {
+  outline-offset: -2px;
+}
+
+.msn-sec:hover .section-label,
+.msn-sec:hover .msn-sec-chev {
+  color: var(--text-dim);
+}
+
+.msn-sec .msn-sec-chev {
+  margin: 0 -2px 0 -4px;
+  font-size: 12px;
+  color: var(--text-faint);
+  transition:
+    transform 0.15s var(--ease),
+    color 0.12s ease;
+}
+
+.msn-sec .msn-sec-chev.open {
+  transform: rotate(90deg);
+}
+
+.msn-sec-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.msn-sec-dot.active {
+  background: var(--accent);
+}
+
+.msn-sec-dot.review {
+  background: var(--ok);
+}
+
+.msn-sec-dot.idea {
+  box-shadow: inset 0 0 0 1.5px var(--text-faint);
+}
+
+.msn-sec-dot.done {
+  background: var(--text-faint);
+}
+
+.msn-sec-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ cards */
+
+.msn-card {
+  position: relative;
+  padding: 9px 10px 7px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--elev);
+  cursor: grab;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    opacity 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.msn-card + .msn-card {
+  margin-top: 6px;
+}
+
+.msn-card:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--elev) 72%, var(--elev-2));
+}
+
+.msn-card:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.msn-card.menu {
+  border-color: var(--border-strong);
+}
+
+/* The whole card drags; the grip only says so. */
+.msn-card .msn-grip {
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 11px;
+  margin-top: -6px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-faint);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.msn-card:hover .msn-grip {
+  opacity: 0.8;
+}
+
+.msn-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.msn-title-text {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.msn-card .msn-check {
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--ok);
+}
+
+.msn-notes {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.msn-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 22px;
+  margin-top: 6px;
+}
+
+.msn-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.msn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--elev-2);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+button.msn-chip:hover {
+  background: var(--elev-3);
+  color: var(--text);
+}
+
+.msn-chip .codicon {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.msn-chip .dot {
+  width: 6px;
+  height: 6px;
+  margin: 0 1px;
+}
+
+.msn-chip-label {
+  flex: 0 3 auto;
+  min-width: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Narrow boards: a linked agent's chip keeps just its live status (its name is in the tooltip). */
+.msn-body {
+  container: msn-body / inline-size;
+}
+
+@container msn-body (max-width: 330px) {
+  .msn-bay .msn-chip-label {
+    display: none;
+  }
+}
+
+.msn-chip-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+.msn-chip-status.shimmer {
+  color: transparent;
+}
+
+.msn-chip-status.attention {
+  color: var(--warn);
+}
+
+.msn-badge {
+  flex: none;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+/* Time and actions share one slot so hovering doesn't reflow the chips. */
+.msn-time {
+  flex: none;
+  min-width: 44px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.msn-actions {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  flex: none;
+  width: 49px;
+  margin: -2px -5px -2px 0;
+}
+
+.msn-card:hover .msn-time,
+.msn-card:focus-within .msn-time,
+.msn-card.menu .msn-time {
+  display: none;
+}
+
+.msn-card:hover .msn-actions,
+.msn-card:focus-within .msn-actions,
+.msn-card.menu .msn-actions {
+  display: flex;
+}
+
+/* An agent is working on it: a light runs along the top edge. */
+.msn-card.working::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat;
+  background-size: 40% 100%;
+  pointer-events: none;
+  animation: msn-sweep 1.8s var(--ease) infinite;
+}
+
+@keyframes msn-sweep {
+  from {
+    background-position: -60% 0;
+  }
+  to {
+    background-position: 160% 0;
+  }
+}
+
+.msn-card.review {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
+}
+
+.msn-card.review:hover,
+.msn-card.review.menu {
+  border-color: color-mix(in srgb, var(--ok) 48%, var(--border-strong));
+}
+
+.msn-card.done {
+  opacity: 0.6;
+}
+
+.msn-card.done:hover,
+.msn-card.done:focus-within,
+.msn-card.done.menu {
+  opacity: 0.92;
+}
+
+.msn-card.done .msn-title {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.msn-card.dragging {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
+/* Just captured. Only a flash: the card may already be on screen when the core confirms the add. */
+.msn-card.fresh {
+  animation: msn-flash 1.5s ease-out both;
+}
+
+@keyframes msn-flash {
+  from {
+    box-shadow: 0 0 0 2px var(--accent-ring);
+  }
+  to {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+/* Inline edit. */
+.msn-card.editing,
+.msn-card.editing:hover {
+  padding: 8px 8px 8px 10px;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  background: var(--elev);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  cursor: default;
+}
+
+.msn-edit-title,
+.msn-edit-notes {
+  display: block;
+  width: 100%;
+  padding: 2px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  resize: none;
+  user-select: text;
+}
+
+.msn-edit-title:focus-visible,
+.msn-edit-notes:focus-visible {
+  outline: none;
+}
+
+.msn-edit-title {
+  min-height: 22px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.msn-edit-notes {
+  min-height: 40px;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.msn-edit-title::placeholder,
+.msn-edit-notes::placeholder {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.msn-edit-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.msn-edit-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ empty states */
+
+.msn-empty {
+  padding-top: 36px;
+}
+
+.msn-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+.empty .msn-empty-icon .codicon {
+  font-size: 22px;
+  color: var(--accent);
+}
+
+.msn-clear {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 2px;
+  padding: 9px 11px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.msn-clear .codicon {
+  font-size: 14px;
+  color: var(--ok);
+}
+
+/* ------------------------------------------------------------------ drag ghost */
+
+.msn-ghost {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 300px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--elev-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  animation: msn-ghost-in 0.12s var(--ease-out) both;
+}
+
+.msn-ghost .codicon {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.msn-ghost.over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--elev-2));
+}
+
+.msn-ghost.over .codicon {
+  color: var(--accent);
+}
+
+.msn-ghost.busy {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border-strong));
+}
+
+.msn-ghost.busy .codicon,
+.msn-ghost-note {
+  color: var(--warn);
+}
+
+.msn-ghost-note {
+  flex: none;
+  font-size: 11.5px;
+}
+
+@keyframes msn-ghost-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* drag.ts sets this class on <body> for the length of a mission drag. */
+body.dragging-mission,
+body.dragging-mission * {
+  cursor: grabbing !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msn-card.working::before,
+  .msn-card.fresh,
+  .msn-ghost,
+  .msn-hint {
+    animation: none;
+  }
+}

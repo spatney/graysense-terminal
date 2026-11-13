@@ -1,228 +1,139 @@
 # Graysense
 
-A fast, flat, modern terminal for **GitHub Copilot agents** — written in Rust and built on the
-[GitHub Copilot SDK](https://crates.io/crates/github-copilot-sdk), so agents render as native UI
-instead of a TUI inside a terminal.
+A futuristic workbench for **GitHub Copilot agents**: a Rust core on the
+[GitHub Copilot SDK](https://crates.io/crates/github-copilot-sdk) with a fast, flat, modern
+interface (Tauri + React). Run agents and terminals side by side, keep the context you'll need
+later, and let Copilot set everything up for you.
 
 ![Graysense](docs/images/hero.png)
 
+## Install
+
+Download **Graysense-win-Setup.exe** from the [latest release](https://github.com/spatney/graysense-terminal/releases/latest)
+and run it. It installs for your account (no admin rights), adds a Start menu shortcut and opens.
+The installer and app are code-signed. Installed copies update themselves: new versions download
+in the background and install when you restart or close Graysense (the repository is private, so
+updates sign in with your GitHub CLI login, `gh auth login`).
+
+Needs Windows 10 or 11 (x64) and the [GitHub Copilot CLI](https://github.com/github/copilot-cli),
+signed in (`copilot login`).
+
 ## Highlights
 
+**Copilot agents, Claude-style**
+- A centered conversation with streaming markdown answers (highlighted, copyable code; tables;
+  task lists). While the agent works, a live **work log** shows every step — commands with their
+  output, edits as diffs, reads, searches, web fetches, subagents — and folds into
+  "Worked for 2m · 14 steps" when the turn is done.
+- Inline cards for **approvals** (*Allow*, *Allow for session*, *Deny* with feedback, showing the
+  exact command, diff, path or URL), **questions**, **forms** and **plan reviews**.
+- **Ask / Plan / Autopilot** modes (Shift+Tab), a context meter, queued follow-ups while the agent
+  works, Esc to stop, ↑ for earlier messages, and slash commands (`/model`, `/effort`, `/mode`,
+  `/attach`, `/rename`, `/learn`, `/clear`, `/stop`, `/terminal`, `/new`).
+- **A model picker with thinking levels**: models grouped into Powerful, Versatile and Fast, with
+  Auto at the top, and how hard the model thinks (Auto, Low, Medium, High, Extra high, Max, as
+  each model offers them). Change them mid-session, or make them what new sessions start with.
+- Attach files by dropping them on an agent, with the + button, or `/attach <path>`.
+
+**Notes: a bucket for context you'll need later**
+- Save what happened — *"When Charles asked for the Rayfin logo, I sent him the dark version"* —
+  with the files and links that go with it. Capture from anywhere with **Ctrl+Shift+S**, the
+  bookmark on any message, or by dropping files on Memory › Notes. Graysense keeps a copy of each
+  file, so the note still works if the original moves.
+- **Search or ask**: type *"what did I give Charles?"* and Copilot answers from your notes, with
+  their files attached. Notes also show up in Ctrl+K search, and agents look them up on their own
+  when they're relevant (`graysense_recall`), or save one when you ask (`graysense_save_note`).
+- **Relevance that maintains itself**: upvote or downvote any note; opening its files, copying it
+  and agents using it raise it, and notes nobody touches fade (half-life of about four months).
+  Rarely useful notes collect in one place to clean up in a click; deleted notes wait in the
+  trash for 30 days.
+
+**Memory you can see and control**
+- Agents learn your preferences and each project's conventions in the background (a cheap model
+  reads finished conversations); new agents start with what's relevant. Review suggestions,
+  edit, pin or delete anything, see where each memory came from, export or import it, and turn
+  learning — or all of memory — off. Incognito sessions never read or write memory.
+
 **Sessions**
-- Every new session gets its own folder, named after your first message, under a sessions folder
-  you choose (`~\Graysense\Sessions` by default; Settings → Sessions, or ask an agent). Want to
-  work in an existing project instead? Use *New session in folder…* or the folder menu.
-- A sessions sidebar (Ctrl+Shift+H) like a chat app's: what's open now, pinned sessions, then
-  everything by date (Today, Yesterday, Previous 7 days…). Filter by name, rename, pin, open the
-  folder, or delete. Sessions started in the Copilot CLI are listed too.
-- **Search everything** (Ctrl+K): session names and conversations, and the names and contents of
-  every file in your sessions folder, with highlighted matches, snippets and line numbers. Open a
-  result, show it in File Explorer, or attach a file to the focused agent.
-- Each agent has a **Files** tab showing its folder (files it changed are marked), and its header
-  folder menu opens the folder in File Explorer or VS Code, or starts a terminal or session there.
+- Every new session gets its own folder, named after your first message, in a sessions folder you
+  choose (`~\Graysense\Sessions` by default). A history sidebar (Ctrl+Shift+H): open sessions,
+  pinned, then Today / Yesterday / Previous 7 days…, with rename, pin, reveal and delete, plus an
+  activity feed. Sessions started in the Copilot CLI are listed too.
+- **Search everything** (Ctrl+K): notes, session names and conversations, and the contents of every
+  file in your sessions folder, with highlighted snippets and line numbers.
+- Each agent has a side panel with its **files**, the **changes** it made, and any canvases or apps.
 
-**Ask agents to set things up**
-- Everything you can configure in Graysense, agents can configure for you: *“switch to the light
-  theme”*, *“make new sessions go in D:\Work”*, *“add the GitHub MCP server”*, *“install the
-  … plugin”*. Agents use `graysense_settings`, `graysense_mcp_servers` and `graysense_plugins`.
-  Appearance changes apply right away; anything else shows the exact change and asks first.
-
-**Native Copilot agents**
-- Streaming markdown replies (code blocks with copy, tables, task lists, links), collapsible reasoning.
-- Hover a message to copy it, edit and resend your own, or try the last reply again. Scrolled up?
-  A button takes you back to the latest.
-- Compact tool rows with live progress; click to expand arguments and output.
-- Inline approvals — *Allow*, *Allow for session*, *Deny* (with feedback) — showing the exact
-  command, diff, path or URL. A ⚡ toggle per agent switches to auto-approve.
-- Native forms for `ask_user` / MCP elicitation (single-choice questions are one click), plan
-  approval, and auto-mode switching.
-- Model picker, Ask / Plan / Autopilot modes, token and context gauges, steering and queued
-  follow-ups while the agent works.
-- Attach files and folders: drag them onto an agent, use the 📎 button, or `/attach <path>`.
-  Reading files you attached never triggers another approval.
-- Slash commands with suggestions: `/model`, `/mode`, `/attach`, `/clear`, `/stop` (anything else is
-  passed through to Copilot).
-
-**Canvases and MCP Apps**
-- Agents can open **canvases** — native, interactive checklists, sortable tables, dashboards with
-  charts, and documents — docked next to the conversation. Graysense registers them as a canvas
-  provider, so they're available to every agent automatically.
-- **MCP Apps** (SEP-1865): tools that ship an interactive UI render in an embedded WebView2 tab, with
-  a sandboxed bridge for `tools/call`, `resources/read`, `ui/message` and links.
-
-**Real terminals**
-- Terminal bays run your shell (pwsh by default) through ConPTY with the `alacritty_terminal` VT
-  engine and GPU text rendering: truecolor, Nerd Font / powerline glyphs, procedural box drawing,
-  mouse reporting, selection, hyperlinks, bracketed paste, scrollback.
-- Text that a program colours for the wrong theme is nudged to stay readable.
-- Drop files on a terminal to paste their (quoted) paths.
+**Bays and terminals**
+- Tile agents and terminals in a grid, columns, rows or one at a time; drag tabs to reorder;
+  maximize with Ctrl+Shift+Enter.
+- Real terminals (PowerShell, Command Prompt, Git Bash or WSL) through ConPTY with xterm.js and
+  WebGL: find, copy and paste, clickable links, and flow control so floods of output never freeze
+  the app. Drop files on a terminal to type their paths.
 
 **Mission board**
-- Capture ideas (`title -- notes`), launch one as a new agent, or drag its card onto a running
-  agent to delegate; double-click a card to edit it. Missions track their agent: active → ready for
-  review → done.
-- Agents can add missions themselves (`graysense_add_mission`) and send you notifications
-  (`graysense_notify`).
+- Capture ideas (Ctrl+Shift+I), then launch one as a new session or drag its card onto an agent to
+  delegate it. Missions follow their agent: in progress → ready for review → done. Agents can add
+  missions too.
 
-**Memory**
-- Agents learn your preferences and each project's conventions as you work, and new agents start
-  with what's relevant. You can see, edit, review and turn off everything it learns —
-  see [Memory](#memory).
+**Canvases, MCP Apps, MCP servers and plugins**
+- Agents open native **canvases** next to the conversation: checklists you can tick, sortable
+  tables, dashboards with charts, and documents.
+- **MCP Apps** (SEP-1865) render in a sandboxed frame with their own content security policy.
+- Manage **MCP servers** (local commands or remote URLs, status, tools, restart) and **plugins**
+  (installed, marketplaces, browse and install).
 
-**Control center**
-- MCP servers: add / edit / remove / enable (stdio, HTTP, SSE), live connection status, tool lists
-  with UI badges, restart, and a one-click MCP Apps demo server.
-- Plugins: installed plugins and marketplaces — install, update, enable, uninstall.
+**Ask agents to set things up**
+- Everything you can configure, agents can configure for you: *"switch to the light theme"*,
+  *"make new sessions go in D:\Work"*, *"add the GitHub MCP server"*. Appearance changes apply
+  right away; anything else shows the exact change and asks first.
 
-**Workspace**
-- Tile any number of agent and terminal bays: grid, focus + stack, columns, rows; maximize any bay.
-- Command palette (Ctrl+Shift+P) for everything, and every shortcut on one sheet (Ctrl+/).
-- A start page with your recent sessions; new terminals open in the focused session's folder.
-- Bays and agent sessions are restored on launch; past sessions resume in their original folder.
-- Toasts and taskbar flashing when an agent needs you or finishes in the background.
-- Four flat themes — Graphite, Carbon, Slate and Paper (light) — and Windows 11 rounded corners.
-- Accessible: controls expose names and roles through UI Automation (AccessKit).
+**Look and feel**
+- Four themes — Graphite, Carbon, Slate and Paper (light) — with the native title bar painted to
+  match, interface zoom (Ctrl+= / Ctrl+-), a command palette (Ctrl+Shift+P) and every shortcut on
+  one sheet (Ctrl+/).
 
-## Memory
+## How it's built
 
-Graysense remembers what your agents learn and gives new agents what's relevant. Everything it
-knows is in the **Memory** panel (Ctrl+Shift+M), where you can review, edit or delete it, and one
-switch turns it off.
+```
+src-tauri/          Rust: the Graysense core
+  src/agent/        Copilot SDK actor (sessions, tools, permissions, canvases, MCP, plugins)
+  src/engine/       UI-agnostic core: bays, actions, learning, and dirty-tracked UI updates
+  src/memory.rs     memory and notes (ranking, relevance, curation, attachments)
+  src/terminal/     PTY service (ConPTY via portable-pty)
+  src/search.rs     search index over sessions and session files
+  src/update.rs     Velopack updater (draft-aware GitHub releases source)
+src/                React + TypeScript UI (Vite)
+  components/       shell, agent bay (transcript, composer, prompts, dock), terminal, panels
+  lib/              store (applies core updates), API, notes ranking, theming
+scripts/            release.ps1 (build, sign, package, publish), render-assets.ps1 (icons)
+```
 
-<img src="docs/images/memory-review.png" alt="Reviewing what agents learned: suggested rule, new fact and an update, each with the words that prompted it" width="320">
+The core runs on its own thread: backend events in, batched UI updates out (only what changed;
+transcripts as per-item patches). The UI calls one `act` command with typed actions.
 
-| Kind | Example | Applies to |
-| --- | --- | --- |
-| Preference | Prefers pnpm over npm | You, everywhere |
-| Fact | The app keeps its state in `%APPDATA%\Graysense` | One project |
-| How-to | Release builds use `cargo build --release` | One project |
-| Session | Fixed the stale-session restore | One project |
-| Approval rule | Always allow `cargo test` in this repo | One project |
+## Develop
 
-**How it learns**
-- Say *"remember that …"* and it's saved immediately, with Undo. Agents can save memories too
-  (through Copilot's memory tool, stored by Graysense).
-- When a conversation goes quiet, or you close it, a background curator reads what you said and
-  files what's durable: new memories, updates, removals, reinforcement and a one-line summary of
-  the session. The curator is a low-cost model in an isolated session with no tools. Tool output is
-  never treated as an instruction, and secrets are redacted and never stored.
-- Confident memories save themselves. Uncertain ones, changes to anything you wrote or pinned, and
-  imports wait under **Review**, together with the words that prompted them.
-- Approve the same command three times in a project and Graysense offers to make it a rule.
-
-**How agents use it**
-- With an agent's first message, the most useful memories (by relevance, confidence, recency and
-  use) are attached as clearly marked notes — never as system instructions — and a
-  *Recalled N memories* chip shows exactly what was shared. Later messages add only newly relevant
-  notes, and agents can search with `graysense_recall`.
-- Memories nobody has confirmed for a while (preferences after 180 days, facts and how-tos after 90,
-  sessions after 30) stop being shared; pin a memory to always share it.
-
-**Your controls**
-- Search, filter, edit, pin and delete. Deleted memories stay in *Recently deleted* for 30 days so
-  learning won't bring them back.
-- Settings: pause learning or sharing separately, review everything before it's saved, pick the
-  learning model, export (JSON or Markdown), import, or clear everything.
-- **Incognito agents** (new-tab menu or palette) neither use nor add to memory.
-- Memory stays on this PC in `%APPDATA%\Graysense\memory.json`. While it's on, it replaces
-  Copilot's built-in memory for Graysense agents; the Copilot CLI itself is unaffected.
-
-## Requirements
-
-- Windows 10 or 11 (x64). MCP Apps use the WebView2 runtime, which ships with Windows 11.
-- The [GitHub Copilot CLI](https://github.com/github/copilot-cli), signed in (`copilot login`).
-  Graysense drives it through the SDK; build with `--features bundled` to embed the runtime instead.
-- To build: Rust 1.88+ with the MSVC toolchain.
-
-## Build and run
+Needs Node.js 20+, Rust 1.94+ and the Copilot CLI.
 
 ```powershell
-cargo run --release
-# or
-target\release\graysense.exe [DIR] [--agent ["PROMPT"]] [--shell] [--no-restore]
+npm install
+npm run tauri dev           # Vite dev server + the debug app with hot reload
+npm test                    # frontend tests (vitest)
+npm run typecheck
+cd src-tauri; cargo test    # core tests
 ```
 
-| Argument | Effect |
-| --- | --- |
-| `DIR` | Working directory for bays opened at startup |
-| `--agent`, `-a` `["PROMPT"]` | Open an agent, optionally sending a first prompt |
-| `--shell`, `-s` | Open a terminal bay |
-| `--no-restore` | Don't reopen the previous workspace |
+`GRAYSENSE_CONFIG_DIR` points the app at another profile (settings, memory, workspace), handy for
+trying things without touching your own. `GRAYSENSE_LOG=debug` turns up logging
+(`%APPDATA%\Graysense\graysense.log`).
 
-## Keyboard shortcuts
+## Release
 
-| Keys | Action |
-| --- | --- |
-| Ctrl+K, Ctrl+Shift+F | Search sessions and files |
-| Ctrl+Shift+P, F1 | Command palette |
-| Ctrl+/ | All keyboard shortcuts |
-| Ctrl+Shift+N | New session |
-| Ctrl+Shift+T | New terminal (in the focused session's folder) |
-| Ctrl+Shift+H | Sessions sidebar |
-| Ctrl+Shift+M | Memory panel |
-| Ctrl+Shift+I | Capture an idea |
-| Ctrl+Shift+W | Close the focused bay |
-| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous bay |
-| Ctrl+Alt+1…9 | Focus bay *n* |
-| Ctrl+Shift+Enter | Maximize / restore the focused bay |
-| Ctrl+Shift+L | Cycle layout |
-| Ctrl+Shift+B | Toggle the side panel |
-| Ctrl+= / Ctrl+- / Ctrl+0 | Terminal font size |
-
-In an agent's composer: **Enter** sends, **Shift+Enter** adds a line, **Esc** stops the agent,
-**↑** recalls previous prompts, **/** opens commands and **Tab** completes them. While a terminal has
-focus, Ctrl+K and Ctrl+/ go to the shell.
-
-## How it works
-
-```
-src/
-  main.rs            entry point: tokio runtime + eframe (wgpu) window
-  app.rs             app shell: chrome, tabs, rail, side panels, bay tiling, persistence
-  agent/
-    backend.rs       Copilot SDK actor: client & sessions, permission/elicitation/ask/plan/canvas
-                     handlers, MCP / plugin / MCP Apps / model RPCs, Graysense tools
-    mod.rs           session events → transcript view model
-    view.rs          agent bay UI: header, virtualized transcript, cards, composer, dock
-    files.rs         the dock's Files tab
-    markdown.rs      markdown renderer
-    forms.rs         JSON Schema → native form
-  term/              PTY terminal: ConPTY + alacritty_terminal, renderer, input, box drawing
-  canvas.rs          native canvas provider (checklist, table, dashboard, document)
-  mcp_apps.rs        MCP Apps host: WebView2 (wry) views + JSON-RPC bridge
-  sessions.rs        session folders, titles and the session index
-  search.rs          search index over session conversations and files (background-built)
-  search_ui.rs       the Ctrl+K search dialog
-  missions.rs        mission board
-  memory.rs          memory store: ranking, review policy, curator prompt and parsing
-  settings.rs        settings, including the schema agents read and change
-  control/           sessions, MCP server, plugin and memory panels
-  palette.rs         command palette          layout.rs   bay tiling
-  theme.rs, kit.rs   flat design system       win.rs      Windows window polish
+```powershell
+pwsh scripts\release.ps1          # build, sign, package and publish v<version>
+pwsh scripts\release.ps1 -Draft   # publish as a draft to look over first
 ```
 
-Each agent bay is a Copilot SDK session. The UI thread never blocks: the backend is a tokio actor
-that owns the client and sessions and talks to the UI over channels; interactive requests
-(approvals, questions, forms) arrive as cards whose answers are sent back through one-shot channels.
-
-## Files
-
-New sessions' folders live in your sessions folder (`~\Graysense\Sessions` unless you change it).
-Graysense keeps its own state in `%APPDATA%\Graysense`:
-`settings.json`, `workspace.json`, `sessions.json` (session names, pins and folders),
-`missions.json`, `memory.json`, the `search` cache and `graysense.log`
-(set `GRAYSENSE_LOG`, e.g. `debug`, to change the log filter; set `GRAYSENSE_CONFIG_DIR` to run
-with a separate profile, e.g. for testing).
-Conversations themselves are stored by the Copilot runtime in `~/.copilot/session-state`, and MCP
-servers and plugins are managed through Copilot's own configuration in `~/.copilot`, so all of
-these are shared with the Copilot CLI. Deleting a session in Graysense removes its conversation;
-the files in its folder stay.
-
-## Troubleshooting
-
-- **"Copilot runtime unavailable"** — install the Copilot CLI and run `copilot login`, or build with
-  `--features bundled`.
-- **Graphics issues** — choose the GPU backend with `WGPU_BACKEND=dx12|vulkan|gl`, or prefer the
-  integrated GPU with `WGPU_POWER_PREF=low`.
-- **An MCP App shows "couldn't be displayed"** — install the
-  [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
+The version comes from `src-tauri/Cargo.toml` (keep `package.json` and `tauri.conf.json` in step)
+and the notes from its `CHANGELOG.md` section. Packages are made with [Velopack](https://velopack.io)
+and signed with Azure Artifact Signing using your Azure CLI sign-in (`az login`).

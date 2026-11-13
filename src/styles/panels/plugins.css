@@ -1,0 +1,414 @@
+/* Plugins panel: installed plugins, and marketplaces to discover more. */
+
+.plg-tabs > .seg {
+  display: flex;
+}
+
+.plg-tabs > .seg > button {
+  flex: 1;
+  justify-content: center;
+}
+
+.plg-tab-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.plg-search > .input {
+  padding-right: 30px;
+}
+
+.plg-search > .plg-search-clear {
+  position: absolute;
+  right: 3px;
+}
+
+.plg mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.plg-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.plg-empty-btn {
+  margin-top: 6px;
+}
+
+/* base.css sizes every icon in an empty state; keep the button's icon button-sized. */
+.plg .empty .btn .codicon {
+  font-size: 14px;
+  color: inherit;
+}
+
+.plg-section-btn.btn.sm {
+  height: 22px;
+  margin: -4px -4px -4px 0;
+  padding: 0 7px;
+  font-size: 11.5px;
+}
+
+.plg-section-btn .codicon {
+  font-size: 13px;
+}
+
+.plg-nomatch {
+  padding: 10px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.plg-nomatch .link-btn {
+  font-size: inherit;
+}
+
+/* ------------------------------------------------------------------ installed */
+
+.list-row.plg-row {
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  transition: opacity 0.12s ease;
+}
+
+.plg-row.leaving,
+.plg-market.leaving {
+  opacity: 0.55;
+}
+
+.plg-ico {
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.plg-row.off .plg-ico {
+  color: var(--text-faint);
+}
+
+.plg-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.plg-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 20px;
+}
+
+.plg-name {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.plg-row.off .plg-name {
+  color: var(--text-dim);
+}
+
+.plg-row .plg-ver {
+  max-width: 40%;
+  padding: 0 5px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--elev-3);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.plg-switch {
+  display: inline-flex;
+  flex: none;
+}
+
+.plg-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.plg-desc.more {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.plg-desc.more:hover {
+  color: var(--text);
+}
+
+.plg-desc.full {
+  display: block;
+  -webkit-line-clamp: none;
+}
+
+.plg-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.plg-meta .codicon {
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ discover */
+
+.plg-market {
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.plg-market.open {
+  margin: 4px 0 6px;
+  border-color: var(--border);
+  background: var(--elev);
+}
+
+.list-row.plg-market-row {
+  gap: 4px;
+  padding: 0 6px 0 0;
+  border-radius: inherit;
+}
+
+.plg-market.open > .plg-market-row {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.plg-hit {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 2px 6px 4px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.plg-hit > .plg-chev {
+  font-size: 14px;
+  color: var(--text-faint);
+  transition: transform 0.15s var(--ease);
+}
+
+.plg-market.open .plg-chev {
+  transform: rotate(90deg);
+}
+
+.plg-market-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.plg-market-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  line-height: 20px;
+}
+
+.plg-market-name {
+  font-weight: 600;
+}
+
+.plg-market-src {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-faint);
+}
+
+.plg-row-spin {
+  margin: 0 7px;
+}
+
+.plg-market-body {
+  padding: 0 10px 8px;
+  animation: fadeIn 0.14s ease both;
+}
+
+.plg-market-body > .plg-loading {
+  padding: 12px 0 6px;
+}
+
+.plg-cards {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plg-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.plg-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 26px;
+}
+
+.plg-card-head > .plg-ico {
+  margin-top: 0;
+}
+
+.plg-card-name {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.plg-card > .plg-desc {
+  margin-left: 24px;
+}
+
+.plg-installing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.plg-quiet {
+  padding: 8px 0 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.plg-quiet.danger {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.plg-quiet .link-btn {
+  font-size: inherit;
+}
+
+/* ------------------------------------------------------------------ add forms, errors, footnote */
+
+.plg-add {
+  margin-top: 8px;
+}
+
+.plg-add-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.input.plg-add-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.input.plg-add-input:placeholder-shown {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+}
+
+.plg-add-row > .btn {
+  flex: none;
+  height: 30px;
+}
+
+.plg .btn.primary .spinner {
+  border-color: color-mix(in srgb, var(--on-accent) 35%, transparent);
+  border-top-color: var(--on-accent);
+}
+
+.plg-problem {
+  display: flex;
+  gap: 10px;
+  margin: 8px 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--elev);
+}
+
+.plg-problem > .codicon {
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.plg-problem-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.plg-problem p {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.plg-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 18px 6px 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.plg-foot .codicon {
+  margin-top: 1px;
+  font-size: 13px;
+  color: var(--accent);
+}

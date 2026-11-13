@@ -1,0 +1,1009 @@
+/* Memory panel: the Notes | Learned header, settings, and the Learned tab (filters, review inbox,
+   memory cards, inline editor). Notes has its own sheet (notes.css). */
+
+/* ------------------------------------------------------------------ header */
+
+.mem-panel .mem-head {
+  gap: 2px;
+  /* The title steps aside when the panel is too narrow for it (see the container query below). */
+  container-type: inline-size;
+}
+
+.mem-panel .mem-head h2 {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mem-panel .mem-head .seg {
+  flex: none;
+  padding: 2px;
+}
+
+.mem-panel .mem-head .seg > button {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11.5px;
+}
+
+.mem-panel .mem-head .seg .count {
+  min-width: 15px;
+  height: 15px;
+  font-size: 9.5px;
+}
+
+.mem-head-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.mem-master {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin: 0 3px;
+}
+
+@container (max-width: 315px) {
+  .mem-panel .mem-head h2 {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------------ settings */
+
+.mem-settings {
+  flex: none;
+  max-height: 50%;
+  overflow-y: auto;
+  margin: 0 8px 10px;
+  padding: 2px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--elev);
+  animation: popIn 0.16s var(--ease-out) both;
+}
+
+.mem-set-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.mem-set-row + .mem-set-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.mem-set-row.mem-disabled {
+  cursor: default;
+}
+
+.mem-set-row.mem-disabled .mem-set-text,
+.mem-set-field.mem-disabled {
+  opacity: 0.55;
+}
+
+.mem-set-row .toggle {
+  margin-top: 1px;
+}
+
+.mem-set-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mem-set-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mem-set-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.mem-set-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.mem-panel .mem-set-field .select {
+  height: 30px;
+  min-height: 30px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 12.5px;
+}
+
+.mem-set-data {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.mem-set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mem-set-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.mem-set-note .codicon {
+  margin-top: 1px;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ learned tab */
+
+.mem-learned {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  animation: fadeIn 0.14s ease both;
+}
+
+.mem-panel .mem-toolbar {
+  padding-bottom: 8px;
+}
+
+.mem-panel .mem-search {
+  padding-right: 30px;
+}
+
+.mem-search-clear {
+  position: absolute;
+  right: 3px;
+}
+
+/* Filter chips: one row that scrolls sideways, fading at whichever edge has more. */
+.mem-filters {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  margin: 0 -12px;
+  padding: 0 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scroll-padding: 0 12px;
+}
+
+.mem-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.mem-filters.mem-fade-l {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 32px);
+  mask-image: linear-gradient(90deg, transparent 0, #000 32px);
+}
+
+.mem-filters.mem-fade-r {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent 100%);
+}
+
+.mem-filters.mem-fade-l.mem-fade-r {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+}
+
+.mem-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.mem-chip:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.mem-chip.mem-on {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.mem-chip.mem-none {
+  opacity: 0.5;
+}
+
+.mem-chip .codicon {
+  font-size: 13px;
+}
+
+.mem-chip-label {
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mem-chip-n {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mem-chip.mem-on .mem-chip-n {
+  color: var(--accent);
+}
+
+.mem-chip .count {
+  min-width: 15px;
+  height: 15px;
+  font-size: 9.5px;
+}
+
+/* One quiet line about learning. */
+.mem-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 16px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.mem-status .codicon {
+  font-size: 12px;
+}
+
+.mem-status.mem-warn {
+  color: var(--warn);
+}
+
+.mem-status-live {
+  color: var(--accent);
+}
+
+.mem-status .link-btn {
+  flex: none;
+  font-size: 11.5px;
+}
+
+.mem-panel .mem-body {
+  padding-top: 2px;
+}
+
+/* ------------------------------------------------------------------ callouts */
+
+.mem-off {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 7%, var(--elev));
+}
+
+.mem-off-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.mem-off-icon .codicon {
+  font-size: 15px;
+}
+
+.mem-off-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.mem-off h3 {
+  margin: 4px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mem-off p {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.mem-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  margin-bottom: 8px;
+  padding: 0 10px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 8%, var(--elev));
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.mem-banner:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--elev));
+}
+
+.mem-banner .codicon {
+  font-size: 14px;
+}
+
+.mem-banner .codicon-sparkle {
+  color: var(--accent);
+}
+
+.mem-banner .codicon-chevron-right {
+  color: var(--text-faint);
+}
+
+.mem-viewhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 2px 10px 4px;
+}
+
+.mem-viewhead p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.mem-new {
+  margin-bottom: 8px;
+}
+
+/* ------------------------------------------------------------------ cards */
+
+.mem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mem-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 9px 9px 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--elev);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.mem-card:hover,
+.mem-card.mem-open {
+  border-color: var(--border-strong);
+}
+
+.mem-card.mem-pinned {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.mem-card.mem-review {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: color-mix(in srgb, var(--accent) 4%, var(--elev));
+}
+
+.mem-card.mem-review:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.mem-card.mem-archived {
+  background: transparent;
+  border-style: dashed;
+}
+
+.mem-card.mem-flash-0 {
+  animation: mem-flash-0 1.6s var(--ease);
+}
+
+.mem-card.mem-flash-1 {
+  animation: mem-flash-1 1.6s var(--ease);
+}
+
+/* Two identical keyframes, so flashing the same card again restarts the animation. */
+@keyframes mem-flash-0 {
+  0%,
+  35% {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--elev));
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+}
+
+@keyframes mem-flash-1 {
+  0%,
+  35% {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--elev));
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+}
+
+.mem-kind {
+  display: flex;
+  justify-content: center;
+  padding-top: 3px;
+  color: var(--text-faint);
+}
+
+.mem-kind .codicon {
+  font-size: 14px;
+}
+
+.mem-card.mem-pinned .mem-kind,
+.mem-card.mem-review .mem-kind {
+  color: var(--accent);
+}
+
+.mem-main {
+  min-width: 0;
+}
+
+.mem-flag {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--accent);
+}
+
+.mem-flag .codicon {
+  font-size: 12px;
+}
+
+.mem-flag.mem-warn {
+  color: var(--warn);
+}
+
+/* The text toggles the details; it reaches a little past its box so the focus ring has room. */
+.mem-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: -1px -4px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.mem-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mem-text.mem-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.mem-text.mem-old {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-faint) 70%, transparent);
+}
+
+.mem-text.mem-old.mem-clamp {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.mem-card.mem-open .mem-text {
+  user-select: text;
+}
+
+.mem-card.mem-archived .mem-text {
+  color: var(--text-dim);
+}
+
+.mem-quote {
+  margin: 6px 0 2px;
+  padding: 1px 0 1px 9px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+/* Meta line: where it applies, where it came from, use; actions take the time's place on hover. */
+.mem-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.mem-meta-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.mem-meta-info > * {
+  flex: none;
+}
+
+.mem-meta-info > .mem-shrink {
+  flex: 0 1 auto;
+}
+
+.mem-shrink {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mem-sep {
+  opacity: 0.7;
+}
+
+.mem-pin {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.mem-pin .codicon {
+  font-size: 12px;
+}
+
+.mem-panel .mem-stale {
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+.mem-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.mem-actions {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  margin-right: -4px;
+}
+
+.mem-card:hover .mem-actions,
+.mem-card:focus-within .mem-actions {
+  display: flex;
+}
+
+.mem-card:not(.mem-review):hover .mem-time,
+.mem-card:not(.mem-review):focus-within .mem-time {
+  display: none;
+}
+
+.mem-panel .mem-actions .btn {
+  height: 22px;
+  padding: 0 7px;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.mem-panel .mem-actions .btn .codicon {
+  font-size: 12px;
+}
+
+.mem-panel .mem-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.mem-decide {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+/* Memory is off: the list stays browsable, quietly. */
+.mem-dim .mem-card {
+  opacity: 0.55;
+}
+
+.mem-dim .mem-card:hover,
+.mem-dim .mem-card:focus-within {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ details */
+
+.mem-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 6px 0 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  animation: fadeIn 0.15s ease both;
+}
+
+.mem-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.mem-facts dt {
+  color: var(--text-faint);
+}
+
+.mem-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.mem-meter {
+  display: inline-block;
+  width: 44px;
+  height: 4px;
+  margin-right: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--elev-3);
+  vertical-align: middle;
+}
+
+.mem-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.mem-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mem-cmds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mem-cmds code {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mem-src {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mem-src-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mem-src-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+}
+
+.mem-src-title .codicon {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.mem-link {
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.mem-link:hover {
+  color: var(--accent);
+}
+
+.mem-link:hover .codicon {
+  color: var(--accent);
+}
+
+.mem-link:hover .ellipsis {
+  text-decoration: underline;
+}
+
+.mem-src-time,
+.mem-rev-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.mem-details .mem-quote {
+  display: block;
+  margin: 0 0 0 1px;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+  user-select: text;
+}
+
+.mem-rev {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mem-rev-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.mem-rev-head > .mem-shrink {
+  flex: 1;
+}
+
+.mem-rev-text {
+  margin: 0;
+  padding-left: 9px;
+  border-left: 2px solid var(--border);
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------ editor */
+
+.mem-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--elev);
+  box-shadow: var(--shadow-sm);
+  animation: popIn 0.16s var(--ease-out) both;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.mem-editor:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.mem-editor.mem-invalid {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border-strong));
+}
+
+.mem-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.mem-editor-head .codicon {
+  font-size: 13px;
+}
+
+.mem-input {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  user-select: text;
+}
+
+.mem-input::placeholder {
+  color: var(--text-faint);
+}
+
+.mem-input:focus-visible {
+  outline: none;
+}
+
+.mem-editor-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mem-panel .mem-editor-opts .seg {
+  max-width: 100%;
+}
+
+.mem-panel .mem-editor-opts .seg > button {
+  min-width: 0;
+}
+
+.mem-seg-label {
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mem-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mem-error .codicon {
+  margin-top: 1px;
+  font-size: 13px;
+}
+
+.mem-editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mem-len {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.mem-len.mem-over {
+  color: var(--warn);
+}
+
+/* ------------------------------------------------------------------ empty states */
+
+.mem-panel .mem-empty {
+  padding: 32px 16px;
+}
+
+.mem-panel .mem-empty .btn {
+  margin-top: 6px;
+}
+
+.mem-elsewhere {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mem-settings,
+  .mem-learned,
+  .mem-editor,
+  .mem-details,
+  .mem-card {
+    animation: none !important;
+  }
+}

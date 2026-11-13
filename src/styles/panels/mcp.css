@@ -1,0 +1,637 @@
+/* MCP servers panel: servers grouped by where their config lives, live status from the
+   focused agent's session, and the add/edit dialog. */
+
+.mcp-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.mcp-hint .codicon {
+  margin-top: 1px;
+  font-size: 13px;
+}
+
+.mcp-hint.live .codicon {
+  color: var(--ok);
+}
+
+.mcp-list {
+  container-type: inline-size;
+}
+
+.mcp-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.mcp-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.mcp-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* base.css sizes every icon in an empty state; keep the buttons' icons button-sized. */
+.mcp .empty .btn .codicon {
+  font-size: 14px;
+  color: inherit;
+}
+
+/* ------------------------------------------------------------------ server rows */
+
+.mcp-server {
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.mcp-server.open {
+  margin: 4px 0 6px;
+  border-color: var(--border);
+  background: var(--elev);
+}
+
+.mcp-server.removing {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.list-row.mcp-row {
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 8px 0 0;
+  border-radius: inherit;
+}
+
+.mcp-server.open > .mcp-row {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.mcp-hit {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0 6px 4px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.mcp-hit > .mcp-chev {
+  margin-top: 3px;
+  font-size: 14px;
+  color: var(--text-faint);
+  transition: transform 0.15s var(--ease);
+}
+
+.mcp-server.open .mcp-chev {
+  transform: rotate(90deg);
+}
+
+.mcp-hit > .dot {
+  margin-top: 6px;
+}
+
+.dot.mcp-dot-warn {
+  background: var(--warn);
+}
+
+.dot.mcp-dot-unknown {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-faint);
+}
+
+.mcp-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  line-height: 20px;
+}
+
+.mcp-name {
+  font-weight: 600;
+}
+
+.mcp-server.off .mcp-name {
+  color: var(--text-dim);
+}
+
+.mcp-kind {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text-faint);
+}
+
+.mcp-sub {
+  font-size: 11.5px;
+  line-height: 17px;
+  color: var(--text-faint);
+}
+
+.mcp-sub.mono {
+  font-size: 11px;
+}
+
+.mcp-sub.warn {
+  color: var(--warn);
+}
+
+.mcp-sub.danger {
+  color: var(--danger);
+}
+
+.mcp-switch {
+  display: inline-flex;
+  flex: none;
+  margin-top: 7px;
+}
+
+/* ------------------------------------------------------------------ details */
+
+.mcp-details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 10px 10px 40px;
+  animation: fadeIn 0.14s ease both;
+}
+
+@container (max-width: 280px) {
+  .mcp-details {
+    padding-left: 12px;
+  }
+
+  /* Keep Restart, Stop, Edit and the menu on one line. */
+  .mcp-actions .btn .codicon {
+    display: none;
+  }
+}
+
+.mcp-props {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mcp-props dt {
+  color: var(--text-faint);
+}
+
+.mcp-props dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.mcp-props dd.mono {
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.mcp-secrets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mcp-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--elev-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.mcp-mask {
+  flex: none;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+}
+
+.mcp-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--elev-2);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mcp-note > .codicon {
+  margin-top: 1px;
+  font-size: 14px;
+  color: var(--text-faint);
+}
+
+.mcp-note.danger {
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--danger-soft);
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.mcp-note.danger > .codicon {
+  color: var(--danger);
+}
+
+.mcp-note.warn {
+  background: var(--warn-soft);
+  color: var(--text);
+}
+
+.mcp-note.warn > .codicon {
+  color: var(--warn);
+}
+
+.mcp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-actions .mcp-more {
+  margin-left: auto;
+}
+
+.mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-tools-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.mcp-quiet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.mcp-quiet.danger {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.mcp-tool-list {
+  margin: 0 -6px;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tool-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mcp-tool-hit:hover {
+  background: var(--hover);
+}
+
+.mcp-tool-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mcp-tool-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.mcp-tool-title .badge {
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+.mcp-tool-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.mcp-tool.full .mcp-tool-desc {
+  display: block;
+  -webkit-line-clamp: none;
+  color: var(--text-dim);
+  user-select: text;
+}
+
+.mcp-tool.full .mcp-tool-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mcp-all-tools {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.mcp-problem {
+  display: flex;
+  gap: 10px;
+  margin: 8px 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--elev);
+}
+
+.mcp-problem > .codicon {
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.mcp-problem-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.mcp-problem p {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.mcp-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 18px 6px 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.mcp-foot .codicon {
+  margin-top: 1px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ add / edit dialog */
+
+.mcp-ed-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: none;
+  padding: 20px 22px 2px;
+}
+
+.mcp-ed-head h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mcp-ed-head p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.mcp-ed-head .link-btn {
+  font-size: inherit;
+}
+
+.mcp-ed-head > .btn {
+  flex: none;
+}
+
+.mcp-ed-head > .btn.mcp-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.modal-body.mcp-ed-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 16px;
+  padding-bottom: 8px;
+}
+
+.mcp-ed-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mcp-field > .seg {
+  align-self: flex-start;
+}
+
+.mcp-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.mcp-label .faint {
+  font-weight: 400;
+}
+
+.mcp-field-hint {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.mcp-field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--danger);
+}
+
+.mcp-field-error .codicon {
+  margin-top: 1px;
+  font-size: 13px;
+}
+
+.mcp-field.invalid .input,
+.mcp-field.invalid .textarea {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--border-strong));
+}
+
+.mcp-field.invalid .input:focus,
+.mcp-field.invalid .textarea:focus {
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+.mcp-inline {
+  display: flex;
+  gap: 6px;
+}
+
+.mcp-inline .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-inline .btn {
+  height: 32px;
+}
+
+.input.mcp-short {
+  width: 140px;
+}
+
+.textarea.mcp-json {
+  min-height: 170px;
+}
+
+.mcp-check {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 9px;
+  margin-top: -6px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mcp-disclose {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mcp-disclose:hover {
+  color: var(--text);
+}
+
+.mcp-disclose .codicon {
+  font-size: 14px;
+  transition: transform 0.15s var(--ease);
+}
+
+.mcp-disclose[aria-expanded='true'] .codicon {
+  transform: rotate(90deg);
+}
+
+.mcp-trust {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.mcp-trust .codicon {
+  margin-top: 1px;
+  font-size: 13px;
+}
+
+.mcp-ed .modal-foot {
+  border-top: 1px solid var(--border-soft);
+}
+
+.mcp-ed .btn.primary .spinner {
+  border-color: color-mix(in srgb, var(--on-accent) 35%, transparent);
+  border-top-color: var(--on-accent);
+}

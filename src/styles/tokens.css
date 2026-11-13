@@ -1,0 +1,171 @@
+/* Graysense design tokens. Flat surfaces on an elevation ladder, hairline borders, one accent.
+   Graphite is the signature theme: neutral greys with the logo's blue→violet. */
+
+:root,
+[data-theme='graphite'] {
+  --bg: #0e0f13;
+  --chrome: #0a0b0e;
+  --elev: #14161b;
+  --elev-2: #1a1c22;
+  --elev-3: #22252d;
+  --border: #23262e;
+  --border-soft: #1a1c22;
+  --border-strong: #2f333d;
+  --text: #e8eaef;
+  --text-dim: #9ca2ae;
+  --text-faint: #686e7b;
+
+  --accent: #7c8cff;
+  --accent-2: #b38bff;
+  --accent-strong: #6574f4;
+  --accent-grad: linear-gradient(120deg, #4f8dff 0%, #8b7bff 55%, #b46dff 100%);
+  --on-accent: #ffffff;
+
+  --ok: #3ddc97;
+  --warn: #f5c451;
+  --danger: #ff6b63;
+
+  --user-bubble: color-mix(in srgb, var(--accent) 13%, var(--elev));
+  --user-bubble-border: color-mix(in srgb, var(--accent) 24%, transparent);
+
+  --code-bg: #0b0c10;
+  --code-surface: #111318;
+  --code-text: #cdd3df;
+  --code-inline-bg: #1d2027;
+  --code-inline-text: #dfe3ee;
+  --syn-comment: #5d6473;
+  --syn-key: #8aa2ff;
+  --syn-str: #8fd6a8;
+  --syn-num: #e3a97a;
+  --syn-fn: #79c4d6;
+  --syn-attr: #c6a5f5;
+  --syn-type: #63c9cf;
+  --syn-punct: #9ca2ae;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.6);
+  --scrim: rgba(4, 5, 8, 0.55);
+
+  color-scheme: dark;
+}
+
+/* Carbon: near-black for OLED panels and dark rooms, with an electric cyan. */
+[data-theme='carbon'] {
+  --bg: #08090b;
+  --chrome: #050607;
+  --elev: #0f1013;
+  --elev-2: #15171b;
+  --elev-3: #1c1f24;
+  --border: #1d2025;
+  --border-soft: #14161a;
+  --border-strong: #2a2e35;
+  --text: #eceef2;
+  --text-dim: #9599a3;
+  --text-faint: #62666f;
+  --accent: #3fc6ff;
+  --accent-2: #5ef0c8;
+  --accent-strong: #1fa9e8;
+  --accent-grad: linear-gradient(120deg, #3fa0ff 0%, #3fc6ff 50%, #5ef0c8 100%);
+  --on-accent: #02131d;
+  --code-bg: #060708;
+  --code-surface: #0c0d10;
+  --code-inline-bg: #17191d;
+  --syn-key: #5fc8ff;
+}
+
+/* Slate: blue-grey, Fabricator's family, with azure and mint. */
+[data-theme='slate'] {
+  --bg: #0b0e14;
+  --chrome: #080b10;
+  --elev: #12161f;
+  --elev-2: #1a1f2b;
+  --elev-3: #232a38;
+  --border: #232a39;
+  --border-soft: #1a2029;
+  --border-strong: #2e3647;
+  --text: #eceff5;
+  --text-dim: #9aa4b8;
+  --text-faint: #6b7488;
+  --accent: #35a3ea;
+  --accent-2: #46ccb0;
+  --accent-strong: #1f8fd6;
+  --accent-grad: linear-gradient(120deg, #2f7fe8 0%, #35a3ea 50%, #46ccb0 100%);
+  --on-accent: #ffffff;
+  --code-bg: #0a0d13;
+  --code-surface: #0f131b;
+  --code-inline-bg: #1a1f2b;
+  --syn-key: #6fb1ff;
+}
+
+/* Paper: light. A cool grey canvas so white cards lift. */
+[data-theme='paper'] {
+  --bg: #f1f2f5;
+  --chrome: #e8eaee;
+  --elev: #ffffff;
+  --elev-2: #eceef2;
+  --elev-3: #f5f6f9;
+  --border: #d9dce3;
+  --border-soft: #e6e8ed;
+  --border-strong: #c7cbd4;
+  --text: #15171c;
+  --text-dim: #4d5361;
+  --text-faint: #7b8190;
+  --accent: #4f5bd5;
+  --accent-2: #8a4fd5;
+  --accent-strong: #4351c9;
+  --accent-grad: linear-gradient(120deg, #3b6fe0 0%, #5b5bd6 55%, #8a4fd5 100%);
+  --on-accent: #ffffff;
+  --ok: #148a57;
+  --warn: #a8740a;
+  --danger: #d33a30;
+  --user-bubble: color-mix(in srgb, var(--accent) 9%, #ffffff);
+  --user-bubble-border: color-mix(in srgb, var(--accent) 22%, transparent);
+  --code-bg: #f6f7f9;
+  --code-surface: #f6f7f9;
+  --code-text: #1f2328;
+  --code-inline-bg: #eceef2;
+  --code-inline-text: #1f2733;
+  --syn-comment: #6e7781;
+  --syn-key: #4351c9;
+  --syn-str: #116329;
+  --syn-num: #953800;
+  --syn-fn: #0b6e70;
+  --syn-attr: #8250df;
+  --syn-type: #0e7490;
+  --syn-punct: #57606a;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.12);
+  --shadow-lg: 0 24px 56px rgba(16, 24, 40, 0.18);
+  --scrim: rgba(20, 24, 33, 0.28);
+  color-scheme: light;
+}
+
+:root {
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-ring: color-mix(in srgb, var(--accent) 42%, transparent);
+  --ok-soft: color-mix(in srgb, var(--ok) 14%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 13%, transparent);
+  --hover: color-mix(in srgb, var(--text) 6%, transparent);
+  --active: color-mix(in srgb, var(--text) 10%, transparent);
+
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 8px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+
+  --rail-w: 48px;
+  --tabs-h: 38px;
+  --status-h: 24px;
+  --chat-measure: 780px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}

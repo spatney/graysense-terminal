@@ -1,0 +1,617 @@
+/* Notes: the Memory panel's shelf of things you saved. */
+
+.nts {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------------ capture */
+
+.nts-capture {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--elev);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.nts-capture:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.nts-capture.dropping {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.nts-capture textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  user-select: text;
+}
+
+.nts-capture textarea::placeholder {
+  color: var(--text-faint);
+}
+
+.nts-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 2px 10px 4px;
+}
+
+.nts-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 2px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--elev-2);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.nts-chip .codicon {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.nts-chip.auto {
+  padding-right: 8px;
+  border-style: dashed;
+  color: var(--text-dim);
+}
+
+.nts-chip.source {
+  max-width: 320px;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--elev-2));
+}
+
+.nts-chip.source > .codicon {
+  color: var(--accent);
+}
+
+.nts-link-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 6px;
+}
+
+.nts-link-row .input {
+  height: 28px;
+  min-height: 28px;
+  font-size: 12.5px;
+}
+
+.nts-capture-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+.nts-drop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 10%, var(--elev));
+  color: var(--accent);
+  font-weight: 600;
+  pointer-events: none;
+  animation: fadeIn 0.1s ease both;
+}
+
+.nts-drop .codicon {
+  margin-right: 6px;
+}
+
+/* ------------------------------------------------------------------ ask */
+
+.nts-ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 2px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--elev);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+  animation: riseIn 0.18s var(--ease-out) both;
+}
+
+.nts-ask:hover,
+.nts-ask.hot {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 7%, var(--elev));
+}
+
+.nts-ask-orb {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 0 16px var(--accent-ring);
+}
+
+.nts-ask-orb .codicon {
+  font-size: 15px;
+}
+
+.nts-ask-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12.5px;
+}
+
+.nts-ask-text b {
+  font-size: 13px;
+}
+
+.nts-ask-text .faint {
+  font-size: 11.5px;
+}
+
+.nts-ask-key {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ note cards */
+
+.nts-card {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  margin: 0 0 6px;
+  padding: 8px 8px 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--elev);
+  transition:
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+  animation: riseIn 0.2s var(--ease-out) both;
+}
+
+.nts-card:hover {
+  border-color: var(--border-strong);
+}
+
+.nts-card.pinned {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.nts-card.faded {
+  opacity: 0.72;
+}
+
+.nts-card.faded:hover {
+  opacity: 1;
+}
+
+.nts-card.flash {
+  animation: ntsFlash 1.8s ease both;
+}
+
+@keyframes ntsFlash {
+  0%,
+  35% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.nts-vote {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 22px;
+  flex: none;
+  padding-top: 1px;
+}
+
+.nts-vote-btn {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-faint);
+}
+
+.nts-vote-btn .codicon {
+  font-size: 14px;
+}
+
+.nts-vote-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.nts-vote-btn.on {
+  color: var(--accent);
+}
+
+.nts-vote-btn.down.on {
+  color: var(--danger);
+}
+
+.nts-vote-n {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.nts-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nts-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: default;
+}
+
+.nts-text.open {
+  display: block;
+}
+
+.nts-text mark {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.nts-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nts-edit .textarea {
+  font-size: 13px;
+  resize: none;
+}
+
+.nts-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.nts-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--elev-2);
+  color: var(--text);
+  font-size: 12px;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.nts-file:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.nts-file .codicon {
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.nts-file.link .codicon {
+  color: var(--accent-2);
+}
+
+.nts-file .nts-file-ext {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.nts-file.missing {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.nts-file.missing .codicon {
+  color: var(--text-faint);
+}
+
+.nts-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  min-width: 0;
+}
+
+.nts-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+  flex: none;
+}
+
+.nts-meter i {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--elev-3);
+}
+
+.nts-meter i:nth-child(1) {
+  height: 4px;
+}
+
+.nts-meter i:nth-child(2) {
+  height: 6px;
+}
+
+.nts-meter i:nth-child(3) {
+  height: 8px;
+}
+
+.nts-meter i:nth-child(4) {
+  height: 10px;
+}
+
+.nts-meter i:nth-child(5) {
+  height: 11px;
+}
+
+.nts-meter i.on {
+  background: var(--accent);
+}
+
+.nts-meter.l1 i.on,
+.nts-meter.l2 i.on {
+  background: var(--text-faint);
+}
+
+.nts-pin {
+  font-size: 12px !important;
+  color: var(--accent);
+}
+
+.nts-source {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 1px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.nts-source:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text-dim);
+}
+
+.nts-source .codicon,
+.nts-used .codicon {
+  font-size: 12px;
+}
+
+.nts-used {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.nts-actions {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-left: 18px;
+  border-radius: 0 0 8px 0;
+  background: linear-gradient(to right, transparent, var(--elev) 16px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.nts-card:hover .nts-actions,
+.nts-card:focus-within .nts-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.nts-when {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ groups, states */
+
+.nts-group {
+  margin-top: 4px;
+}
+
+.nts-group-head {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nts-group-head .codicon {
+  font-size: 13px;
+}
+
+.nts-trash-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.nts-trash-row:hover {
+  background: var(--hover);
+}
+
+.nts-trash-row.flash {
+  background: var(--accent-soft);
+}
+
+.nts-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.nts-banner .codicon {
+  color: var(--warn);
+  font-size: 14px;
+  margin-top: 1px;
+}
+
+.nts-empty {
+  padding-top: 36px;
+}
+
+.nts-examples {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  max-width: 100%;
+}
+
+.nts-examples .chip {
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.nts-foot {
+  margin: 14px 6px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+/* Quick capture window (Ctrl+Shift+S). */
+.nts-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 18px 10px;
+}
+
+.nts-modal-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.nts-modal-head .codicon-bookmark {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.nts-modal-body {
+  padding: 0 18px 18px;
+}
+
+.nts-modal-body .nts-capture textarea {
+  min-height: 96px;
+  font-size: 13.5px;
+}
+
+.nts-modal-hint {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}

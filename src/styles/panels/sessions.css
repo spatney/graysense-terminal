@@ -1,0 +1,412 @@
+/* Sessions: a chat-history sidebar. Open agents, pinned, then by date; agent activity at the bottom. */
+
+.ses-filter > .input {
+  padding-right: 30px;
+}
+
+.ses-filter-clear {
+  position: absolute;
+  right: 3px;
+}
+
+.ses-list {
+  padding-bottom: 12px;
+}
+
+/* Section headers stay put while their rows scroll under them. */
+.ses-sec {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 8px 4px 10px;
+  background: var(--chrome);
+}
+
+.ses-sec-count {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ rows */
+
+.ses-row {
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 4px 3px 10px;
+  cursor: pointer;
+}
+
+.ses-row + .ses-row {
+  margin-top: 1px;
+}
+
+.ses-row:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -2px;
+}
+
+.ses-row.menu {
+  background: var(--hover);
+}
+
+.ses-row.menu .row-actions,
+.ses-row:focus-within .row-actions {
+  display: flex;
+}
+
+.ses-row.menu .row-meta,
+.ses-row:focus-within .row-meta {
+  display: none;
+}
+
+.ses-row .row-actions {
+  margin-left: 0;
+}
+
+.ses-row .row-meta {
+  margin-left: 0;
+}
+
+.ses-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Open agents. */
+.ses-live .dot {
+  margin: 0 1px;
+}
+
+.ses-status {
+  flex: 0 1 auto;
+  max-width: 46%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ses-status.shimmer {
+  color: transparent;
+}
+
+.ses-status.attention {
+  color: var(--warn);
+}
+
+.ses-status.error {
+  color: var(--danger);
+}
+
+.ses-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--text-faint);
+}
+
+.ses-mark .codicon {
+  font-size: 12px;
+}
+
+.ses-row .count {
+  flex: none;
+}
+
+.ses-cli {
+  flex: none;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+/* Inline rename. */
+.ses-row.renaming {
+  padding: 1px 2px;
+  cursor: default;
+}
+
+.ses-row.renaming:hover {
+  background: transparent;
+}
+
+.ses-rename {
+  height: 28px;
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: 13px;
+}
+
+/* "Search inside sessions for …" */
+.ses-search {
+  color: var(--accent);
+}
+
+.ses-search > .codicon {
+  font-size: 14px;
+}
+
+.ses-search:hover {
+  color: var(--accent);
+}
+
+.ses-none {
+  padding: 14px 10px 6px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ loading and empty */
+
+.ses-skeleton {
+  display: flex;
+  flex-direction: column;
+  padding-top: 4px;
+}
+
+.ses-skel-head {
+  display: block;
+  width: 64px;
+  height: 8px;
+  margin: 12px 10px 10px;
+  border-radius: 4px;
+  background: var(--elev-3);
+  animation: ses-pulse 1.4s ease-in-out infinite;
+}
+
+.ses-skel-row {
+  display: flex;
+  align-items: center;
+  height: 31px;
+  padding: 0 10px;
+}
+
+.ses-skel-row > span {
+  height: 9px;
+  border-radius: 5px;
+  background: var(--elev-3);
+  animation: ses-pulse 1.4s ease-in-out infinite;
+}
+
+.ses-skel-row:nth-child(odd) > span {
+  animation-delay: 0.15s;
+}
+
+@keyframes ses-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ses-empty {
+  padding-top: 40px;
+}
+
+.ses-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+.empty .ses-empty-icon .codicon {
+  font-size: 22px;
+  color: var(--accent);
+}
+
+.ses-empty .btn {
+  margin-top: 6px;
+}
+
+.ses-empty .btn .codicon {
+  font-size: 14px;
+  color: inherit;
+}
+
+/* ------------------------------------------------------------------ activity */
+
+.ses-activity {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+  border-top: 1px solid var(--border-soft);
+  background: var(--chrome);
+  container: ses-activity / inline-size;
+}
+
+.ses-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  text-align: left;
+}
+
+.ses-activity-head:hover {
+  background: var(--hover);
+}
+
+.ses-activity-head:hover .section-label,
+.ses-activity-head:hover .ses-activity-chev {
+  color: var(--text-dim);
+}
+
+.ses-activity-head:focus-visible {
+  outline-offset: -2px;
+}
+
+.ses-activity .ses-activity-chev {
+  font-size: 12px;
+  transition: transform 0.15s var(--ease);
+}
+
+.ses-activity.open .ses-activity-chev {
+  transform: rotate(90deg);
+}
+
+.ses-activity-peek {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  margin-left: 4px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.ses-activity-list {
+  max-height: min(260px, 38vh);
+  overflow-y: auto;
+  padding: 0 6px 8px;
+  animation: fadeIn 0.12s ease both;
+}
+
+.ses-activity-empty {
+  padding: 4px 10px 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.ses-act-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+}
+
+.ses-act-line:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ses-act-line.closed {
+  cursor: default;
+}
+
+.ses-act-line.closed:hover {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.ses-act-line:focus-visible {
+  outline-offset: -2px;
+}
+
+.ses-act-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ses-act-bay {
+  flex: 0 1 auto;
+  max-width: 34%;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Narrow panels: the line's text matters most; its agent is in the tooltip. */
+@container ses-activity (max-width: 290px) {
+  .ses-act-bay {
+    display: none;
+  }
+}
+
+.ses-act-time {
+  flex: none;
+  min-width: 26px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ses-activity .ses-lvl {
+  font-size: 13px;
+}
+
+.ses-lvl.info {
+  color: var(--text-faint);
+}
+
+.ses-lvl.ok {
+  color: var(--ok);
+}
+
+.ses-lvl.warn {
+  color: var(--warn);
+}
+
+.ses-lvl.error {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ses-skel-head,
+  .ses-skel-row > span,
+  .ses-activity-list {
+    animation: none;
+  }
+}
+
+/* Where the next page of sessions starts drawing. */
+.ses-more {
+  height: 1px;
+}
+

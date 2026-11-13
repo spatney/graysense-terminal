@@ -1,26 +1,33 @@
 <#
 .SYNOPSIS
-    Builds Graysense, packages its installer and updates with Velopack, and publishes a GitHub
-    release.
+    Builds Graysense (Tauri), packages its installer and updates with Velopack, signs them with
+    Azure Artifact Signing, and publishes a GitHub release.
 
 .DESCRIPTION
-    The version comes from Cargo.toml and the release notes from its section in CHANGELOG.md.
+    The version comes from src-tauri\Cargo.toml (package.json and tauri.conf.json must match) and
+    the release notes from its section in CHANGELOG.md.
 
-      1. cargo build --release
+      1. npx tauri build --no-bundle: the web UI (vite build) and the release exe.
       2. Gets vpk, Velopack's packager. It runs on the .NET runtime; no SDK needed.
       3. Downloads the latest published release, so the new one includes a small delta update.
       4. vpk pack: Graysense-win-Setup.exe, a portable zip, the update packages and the feed
-         (releases.win.json) that installed copies read.
+         (releases.win.json) that installed copies read. Every executable is signed with Azure
+         Artifact Signing (signtool and Microsoft's Azure.CodeSigning.Dlib come with vpk), using
+         your Azure CLI sign-in (az login), which needs the "Artifact Signing Certificate Profile
+         Signer" role on the signing account.
       5. vpk upload github: creates the v<version> tag and release at the current commit.
 
-    Needs the GitHub CLI signed in with access to the repo, the .NET 8 runtime or later, and the
-    commit being released pushed to GitHub.
+    Needs Node.js, Rust, the GitHub CLI signed in with access to the repo, the Azure CLI signed in
+    (unless -NoSign), the .NET 8 runtime or later, and the commit being released pushed to GitHub.
 
 .PARAMETER Draft
     Leave the release as a draft to look over first. Installed copies ignore drafts.
 
 .PARAMETER NoUpload
     Only build the installer and packages (in target\dist\releases, or -OutDir).
+
+.PARAMETER NoSign
+    Don't sign (local test packages).
 
 .PARAMETER Version
     Package a different version than Cargo.toml's, with -NoUpload. For testing updates: package an
@@ -30,15 +37,16 @@
     Where packages go. It's emptied first.
 
 .PARAMETER SkipBuild
-    Package the existing target\release\graysense.exe.
+    Package the existing src-tauri\target\release\graysense.exe.
 
 .EXAMPLE
     pwsh scripts\release.ps1
-    pwsh scripts\release.ps1 -NoUpload -Version 0.0.9 -OutDir target\dist\old -SkipBuild
+    pwsh scripts\release.ps1 -NoUpload -NoSign -Version 0.0.9 -OutDir target\dist\old -SkipBuild
 #>
 param(
     [switch]$Draft,
     [switch]$NoUpload,
+    [switch]$NoSign,
     [string]$Version,
     [string]$OutDir,
     [switch]$SkipBuild
@@ -48,13 +56,24 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 $repo = 'spatney/graysense-terminal'
-# Keep in step with the velopack crate in Cargo.toml.
+# Keep in step with the velopack crate in src-tauri\Cargo.toml.
 $vpkVersion = '1.2.161'
+# Azure Artifact Signing (formerly Trusted Signing).
+$signing = [ordered]@{
+    Endpoint               = 'https://eus.codesigning.azure.net'
+    CodeSigningAccountName = 'rayfinfabricator'
+    CertificateProfileName = 'rayfin-fabricator'
+}
 
 function Step([string]$Text) { Write-Host "`n> $Text" -ForegroundColor Cyan }
 function Fail([string]$Text) { Write-Host "x $Text" -ForegroundColor Red; exit 1 }
 
-$cargoVersion = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+$cargoVersion = (Select-String -Path src-tauri\Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+$npmVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+$tauriVersion = (Get-Content src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
+if ($npmVersion -ne $cargoVersion -or $tauriVersion -ne $cargoVersion) {
+    Fail "Versions differ: src-tauri\Cargo.toml $cargoVersion, package.json $npmVersion, tauri.conf.json $tauriVersion."
+}
 if (-not $Version) { $Version = $cargoVersion }
 $tag = "v$Version"
 $OutDir = if ($OutDir) { [IO.Path]::GetFullPath((Join-Path $root $OutDir)) } else { Join-Path $root 'target\dist\releases' }
@@ -63,6 +82,7 @@ $dist = Join-Path $root 'target\dist'
 # --- Checks before anything is built or published.
 if (-not $NoUpload) {
     if ($Version -ne $cargoVersion) { Fail "-Version only makes local test packages. Releases use Cargo.toml's version ($cargoVersion)." }
+    if ($NoSign) { Fail 'Releases are signed. -NoSign is for local test packages.' }
     gh auth status --hostname github.com *> $null
     if ($LASTEXITCODE) { Fail 'Sign in to the GitHub CLI first: gh auth login' }
     if (git status --porcelain) { Fail 'Commit your changes first: the release is built from, and tagged at, the current commit.' }
@@ -70,7 +90,11 @@ if (-not $NoUpload) {
     $head = (git rev-parse HEAD).Trim()
     if (-not (git branch -r --contains $head)) { Fail 'Push this commit to GitHub first (git push).' }
     gh release view $tag --repo $repo *> $null
-    if ($LASTEXITCODE -eq 0) { Fail "$tag is already released. Bump the version in Cargo.toml and add a CHANGELOG.md section." }
+    if ($LASTEXITCODE -eq 0) { Fail "$tag is already released. Bump the version (Cargo.toml, package.json, tauri.conf.json) and add a CHANGELOG.md section." }
+}
+if (-not $NoSign) {
+    az account show --only-show-errors *> $null
+    if ($LASTEXITCODE) { Fail 'Sign in to the Azure CLI first (az login): signing uses your Azure sign-in.' }
 }
 
 # --- Release notes: the version's section of CHANGELOG.md.
@@ -88,10 +112,11 @@ if ($section.Success) {
 # --- Build.
 if (-not $SkipBuild) {
     Step "Building Graysense $cargoVersion"
-    cargo build --release --locked
-    if ($LASTEXITCODE) { Fail 'cargo build failed.' }
+    if (-not (Test-Path node_modules)) { npm ci --no-audit --no-fund; if ($LASTEXITCODE) { Fail 'npm ci failed.' } }
+    npx tauri build --no-bundle
+    if ($LASTEXITCODE) { Fail 'tauri build failed.' }
 }
-$exe = Join-Path $root 'target\release\graysense.exe'
+$exe = Join-Path $root 'src-tauri\target\release\graysense.exe'
 if (-not (Test-Path $exe)) { Fail "There's no release build at $exe." }
 $app = Join-Path $dist 'app'
 Remove-Item $app -Recurse -Force -ErrorAction SilentlyContinue
@@ -129,17 +154,34 @@ if (-not $NoUpload) {
     }
 }
 
-# --- Package.
-Step "Packaging Graysense $Version"
+# --- Package (and sign).
+Step "Packaging Graysense $Version$(if (-not $NoSign) { ', signed' })"
 $packArgs = @(
     'pack', '--packId', 'Graysense', '--packVersion', $Version, '--packDir', $app, '--mainExe', 'graysense.exe',
-    '--packTitle', 'Graysense', '--packAuthors', 'Graysense', '--outputDir', $OutDir,
+    '--packTitle', 'Graysense', '--packAuthors', 'Sachin Patney', '--outputDir', $OutDir,
     '--icon', (Join-Path $root 'assets\graysense.ico'),
-    '--splashImage', (Join-Path $root 'assets\installer-splash.png'), '--splashProgressColor', '#5B8CFF',
-    '--shortcuts', 'StartMenuRoot'
+    '--splashImage', (Join-Path $root 'assets\installer-splash.png'), '--splashProgressColor', '#7C8CFF',
+    '--shortcuts', 'StartMenuRoot',
+    # Installs Microsoft Edge WebView2 first on the rare Windows that lacks it.
+    '--framework', 'webview2'
 )
 if (Test-Path $notes) { $packArgs += '--releaseNotes', $notes }
+if (-not $NoSign) {
+    $metadata = Join-Path $dist 'signing.json'
+    $signing | ConvertTo-Json | Set-Content $metadata -Encoding utf8
+    $packArgs += '--azureTrustedSignFile', $metadata
+}
 Invoke-Vpk @packArgs
+
+if (-not $NoSign) {
+    Step 'Checking signatures'
+    $setup = Get-ChildItem $OutDir -Filter '*Setup.exe' | Select-Object -First 1
+    foreach ($file in @($setup.FullName, (Join-Path $app 'graysense.exe'))) {
+        $sig = Get-AuthenticodeSignature $file
+        if ($sig.Status -ne 'Valid') { Fail "$([IO.Path]::GetFileName($file)) isn't signed ($($sig.Status))." }
+        Write-Host "  $([IO.Path]::GetFileName($file)): $($sig.SignerCertificate.Subject)"
+    }
+}
 
 if ($NoUpload) {
     Step "Packages are in $OutDir"
@@ -159,7 +201,7 @@ $(Get-Content $notes -Raw)
 
 ## Install
 
-Download **Graysense-win-Setup.exe** below and run it. Graysense installs for your account (no admin rights needed), adds itself to the Start menu and opens. The installer isn't code-signed yet, so Windows SmartScreen may warn about it: choose **More info › Run anyway**.
+Download **Graysense-win-Setup.exe** below and run it. Graysense installs for your account (no admin rights needed), adds itself to the Start menu and opens. The installer and app are code-signed; Windows SmartScreen can still ask about a new app while its reputation builds: choose **More info › Run anyway**.
 
 Installed copies keep themselves up to date: new versions download in the background and install when you restart or close Graysense. This repository is private, so updates sign in with your GitHub CLI login (``gh auth login``).
 
