@@ -3,7 +3,8 @@ import { act, setSide } from '../../lib/api';
 import { ago, shortPath } from '../../lib/format';
 import { focusComposer, setDraft, useUi } from '../../lib/store';
 import type { BayDto } from '../../lib/types';
-import { Icon } from '../ui';
+import { agentFolderItems } from '../folders';
+import { Icon, showMenu } from '../ui';
 import { Composer } from './Composer';
 
 const SUGGESTIONS: { icon: string; label: string; prompt: string }[] = [
@@ -47,7 +48,12 @@ export function Hero({ bay }: { bay: BayDto | null }) {
         </h1>
         <p>{agent?.incognito ? 'Incognito: this session won’t use or add to memory.' : 'Copilot can plan, write and run code, and remember what you teach it.'}</p>
         {where && (
-          <button type="button" className="bay-crumb hero-folder" data-tip={`${where.path} · Change in Settings`} onClick={() => void setSide('settings')}>
+          <button
+            type="button"
+            className="bay-crumb hero-folder"
+            data-tip={bay?.agent ? where.path : `${where.path} · Change in Settings`}
+            onClick={(e) => (bay?.agent ? showMenu(e.currentTarget, agentFolderItems(bay)) : void setSide('settings'))}
+          >
             <Icon name="folder" />
             <span className="ellipsis">
               {where.lead} {shortPath(where.path, home)}

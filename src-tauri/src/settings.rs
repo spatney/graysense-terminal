@@ -167,6 +167,14 @@ impl Settings {
         self.recent_dirs.truncate(12);
     }
 
+    /// Drop `dir` from the recent folders. Returns whether it was there.
+    pub fn forget_recent_dir(&mut self, dir: &Path) -> bool {
+        let s = dir.display().to_string();
+        let before = self.recent_dirs.len();
+        self.recent_dirs.retain(|d| !d.eq_ignore_ascii_case(&s));
+        self.recent_dirs.len() != before
+    }
+
     pub fn default_dir(&self) -> PathBuf {
         self.recent_dirs
             .iter()

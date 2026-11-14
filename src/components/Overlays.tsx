@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { act, captureNote, newAgentIn, newSession, newShell, newShellIn, restartToUpdate, revealMemory, search, setSide, toggleSide } from '../lib/api';
+import { act, captureNote, changeFolder, newAgentIn, newSession, newShell, newShellIn, restartToUpdate, revealMemory, search, setSide, toggleSide } from '../lib/api';
 import { rankNotes } from '../lib/notes';
 import { NoteCapture } from './NoteCapture';
 import { ago, baseName, contextLabel, effortLabel, plural, shortPath } from '../lib/format';
+import { useImageUrl } from '../lib/images';
 import { focusComposer, openOverlay, type Overlay, toast, useUi } from '../lib/store';
 import { THEMES } from '../lib/theme';
 import type { SearchHit } from '../lib/types';
-import { Icon, Kbd, Modal } from './ui';
+import { Icon, Kbd, Modal, copyText } from './ui';
 
 export function Overlays() {
   const overlay = useUi((s) => s.overlay);
@@ -23,7 +24,47 @@ export function Overlays() {
       return <Confirm o={overlay} onClose={close} />;
     case 'note':
       return <NoteOverlay o={overlay} onClose={close} />;
+    case 'image':
+      return <ImageOverlay key={overlay.path} path={overlay.path} onClose={close} />;
   }
+}
+
+/** An image, large: its name and size, and what you can do with the file. */
+function ImageOverlay({ path, onClose }: { path: string; onClose: () => void }) {
+  const url = useImageUrl(path);
+  const [size, setSize] = useState<[number, number] | null>(null);
+  const name = baseName(path);
+  return (
+    <Modal onClose={onClose} width="auto" className="image-viewer" labelledBy="image-title">
+      <div className="image-viewer-head">
+        <Icon name="file-media" />
+        <h3 id="image-title" className="ellipsis" data-tip={path}>
+          {name}
+        </h3>
+        {size && (
+          <span className="faint">
+            {size[0]} × {size[1]}
+          </span>
+        )}
+        <span className="grow" />
+        <button type="button" className="icon-btn" data-tip="Open" onClick={() => void act({ type: 'openPath', path })}>
+          <Icon name="link-external" />
+        </button>
+        <button type="button" className="icon-btn" data-tip="Reveal in File Explorer" onClick={() => void act({ type: 'revealPath', path })}>
+          <Icon name="folder-opened" />
+        </button>
+        <button type="button" className="icon-btn" data-tip="Copy path" onClick={() => void copyText(path, 'Path copied')}>
+          <Icon name="copy" />
+        </button>
+        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="image-viewer-body">
+        {url === undefined ? <span className="spinner" /> : url === null ? <p className="faint">Graysense can’t show this image. It may have been moved or deleted.</p> : <img src={url} alt={name} onLoad={(e) => setSize([e.currentTarget.naturalWidth, e.currentTarget.naturalHeight])} />}
+      </div>
+    </Modal>
+  );
 }
 
 /** Ctrl+Shift+S: save a note from anywhere. Files dropped on the window while it's open go in it. */
@@ -281,6 +322,7 @@ function useCommands(): Command[] {
     if (focused.agent) {
       const agent = focused.agent;
       cmds.push(
+        { id: 'cd', label: agent.deferred ? 'Start this session in a folder…' : 'Change folder…', icon: 'arrow-swap', group: 'Bay', run: () => void changeFolder(focused.id) },
         { id: 'learn', label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', group: 'Bay', run: () => void act({ type: 'learnNow', bay: focused.id }) },
         { id: 'clear', label: 'Clear transcript', icon: 'clear-all', group: 'Bay', run: () => void act({ type: 'clearTranscript', bay: focused.id }) },
       );

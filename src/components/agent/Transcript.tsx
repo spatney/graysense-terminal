@@ -1,8 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { act, captureNote, revealMemory } from '../../lib/api';
 import { baseName, duration, plural } from '../../lib/format';
+import { isImagePath } from '../../lib/images';
 import { setDraft, focusComposer, useUi } from '../../lib/store';
 import type { AgentDto, AssistantItem, BayDto, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
+import { ImageThumb } from '../ImageThumb';
 import { CodeBlock, Markdown } from '../Markdown';
 import { Icon, copyText } from '../ui';
 import { PromptCard, isPrompt } from './Prompts';
@@ -532,18 +534,24 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
 }, sameTurn);
 
 function UserMessage({ text, files, queued }: { text: string; files: string[]; queued?: boolean }) {
+  const images = files.filter(isImagePath);
+  const others = files.filter((f) => !isImagePath(f));
+  const chip = (f: string) => (
+    <span key={f} className="file-chip" data-tip={f !== baseName(f) ? f : undefined}>
+      <Icon name="file" /> <span className="ellipsis">{baseName(f)}</span>
+    </span>
+  );
   return (
     <div className="user-msg">
-      <div className={`user-bubble ${queued ? 'queued' : ''}`}>{text}</div>
-      {files.length > 0 && (
-        <div className="user-files">
-          {files.map((f) => (
-            <span key={f} className="file-chip">
-              <Icon name="file" /> <span className="ellipsis">{f}</span>
-            </span>
+      {images.length > 0 && (
+        <div className="user-images">
+          {images.map((f) => (
+            <ImageThumb key={f} path={f} fallback={chip(f)} />
           ))}
         </div>
       )}
+      <div className={`user-bubble ${queued ? 'queued' : ''}`}>{text}</div>
+      {others.length > 0 && <div className="user-files">{others.map(chip)}</div>}
     </div>
   );
 }

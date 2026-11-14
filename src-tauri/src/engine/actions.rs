@@ -42,6 +42,8 @@ pub enum Action {
         context: Option<String>,
     },
     SetMode { bay: BayId, mode: String },
+    /// Move an agent to another folder (a session that hasn't started yet starts there).
+    ChangeFolder { bay: BayId, dir: String },
     Rename { bay: BayId, name: String },
     Attach { bay: BayId, paths: Vec<String> },
     Detach { bay: BayId, path: String },
@@ -178,11 +180,15 @@ impl Core {
             Action::NewAgent { dir, prompt } => {
                 let dir = PathBuf::from(dir);
                 if !dir.is_dir() {
+                    self.forget_dir(&dir);
                     return Err(format!("{} isn't a folder.", dir.display()));
                 }
                 Ok(json!(self.new_agent(dir, prompt.filter(|p| !p.trim().is_empty()), None, None, false)))
             }
             Action::NewShell { dir, shell } => {
+                if let Some(gone) = dir.as_deref().map(PathBuf::from).filter(|d| !d.is_dir()) {
+                    self.forget_dir(&gone);
+                }
                 let dir = dir.map(PathBuf::from).filter(|d| d.is_dir()).or_else(|| self.live_focused_dir()).unwrap_or_else(|| self.settings.default_dir());
                 Ok(json!(self.new_shell(dir, shell)))
             }
@@ -252,6 +258,15 @@ impl Core {
                 if !v.deferred {
                     self.backend.send(Cmd::SetMode { bay, mode });
                 }
+                ok
+            }
+            Action::ChangeFolder { bay, dir } => {
+                let dir = crate::util::tidy_path(&PathBuf::from(dir.trim()));
+                if !dir.is_dir() {
+                    self.forget_dir(&dir);
+                    return Err(format!("{} isn't a folder.", dir.display()));
+                }
+                self.change_folder(bay, dir)?;
                 ok
             }
             Action::Rename { bay, name } => {
@@ -730,7 +745,7 @@ impl Core {
         let v = self.agent_mut(bay).ok_or("That agent is closed.")?;
         let files = std::mem::take(&mut v.attachments);
         v.granted.lock().extend(files.iter().cloned());
-        let names = files.iter().map(|p| settings::dir_name(p)).collect();
+        let shown_files = files.iter().map(|p| p.display().to_string()).collect();
         // The first message names the session (until the user names it).
         if v.title.is_none() {
             v.title = Some(text.clone());
@@ -742,7 +757,7 @@ impl Core {
                 name_session = Some(name);
             }
         }
-        v.echo_user_shown(&text, &sent, names, steer);
+        v.echo_user_shown(&text, &sent, shown_files, steer);
         v.learn_due = None;
         super::capture_explicit_memory(&memory, enabled, v, &text);
         if let Some((id, name)) = index_name {

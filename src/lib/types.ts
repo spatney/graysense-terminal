@@ -63,6 +63,7 @@ export interface AgentDto {
 
 export interface QueuedMessage {
   text: string;
+  /** Attached files' full paths. */
   files: string[];
   /** Read at the agent's next step rather than after its turn. */
   steer: boolean;
@@ -146,6 +147,7 @@ export interface PermissionDto {
 export interface UserItem {
   type: 'user';
   text: string;
+  /** Attached files' full paths (just a name for attachments that have no path). */
   files: string[];
   /** How long the agent worked on it (ms), once a turn of its has ended. */
   took?: number | null;
@@ -555,6 +557,8 @@ export type Action =
   | { type: 'abort'; bay: BayId }
   | { type: 'setModel'; bay: BayId; model: string; effort?: string | null; context?: string | null }
   | { type: 'setMode'; bay: BayId; mode: string }
+  /** Move an agent to another folder (a session that hasn't started yet starts there). */
+  | { type: 'changeFolder'; bay: BayId; dir: string }
   | { type: 'rename'; bay: BayId; name: string }
   | { type: 'attach'; bay: BayId; paths: string[] }
   | { type: 'detach'; bay: BayId; path: string }

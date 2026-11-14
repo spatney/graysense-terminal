@@ -22,6 +22,7 @@ export type Overlay =
   | { kind: 'palette'; mode?: 'commands' | 'folders-agent' | 'folders-shell' | 'sessions' }
   | { kind: 'shortcuts' }
   | { kind: 'note'; text?: string; files?: string[]; session?: string | null; title?: string | null }
+  | { kind: 'image'; path: string }
   | { kind: 'confirm'; title: string; body: string; confirm: string; danger?: boolean; onConfirm: () => void };
 
 export interface LocalToast extends ToastDto {

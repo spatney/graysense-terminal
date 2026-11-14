@@ -525,14 +525,60 @@ impl Core {
             self.backend.send(Cmd::NameSession { bay: id, name, user: false });
         }
         self.push_bay(Bay { id, kind: BayKind::Agent(Box::new(view)) });
-        if !sessions::is_under(&cwd, &self.settings.sessions_root()) {
-            self.settings.push_recent_dir(&cwd);
-            self.settings_dirty = true;
-        }
+        self.remember_dir(&cwd);
         if self.models.is_empty() {
             self.backend.send(Cmd::ListModels);
         }
         id
+    }
+
+    /// Offer `dir` among the recent folders (session folders aren't: there are too many of them).
+    fn remember_dir(&mut self, dir: &Path) {
+        if !sessions::is_under(dir, &self.settings.sessions_root()) {
+            self.settings.push_recent_dir(dir);
+            self.settings_dirty = true;
+        }
+    }
+
+    /// Drop a folder that's gone from the recent ones.
+    fn forget_dir(&mut self, dir: &Path) {
+        if self.settings.forget_recent_dir(dir) {
+            self.settings_dirty = true;
+        }
+    }
+
+    /// Move an agent to another folder. A session that hasn't started yet starts there instead of
+    /// in a new session folder; a running one moves once the runtime agrees ([`Evt::CwdChanged`]),
+    /// which re-anchors its tools, permissions and instructions to the folder.
+    pub fn change_folder(&mut self, bay: BayId, dir: PathBuf) -> Result<(), String> {
+        let project = self.project_for(&dir);
+        let v = self.agent(bay).ok_or("That agent is closed.")?;
+        if v.deferred {
+            let v = self.agent_mut(bay).ok_or("That agent is closed.")?;
+            v.deferred = false;
+            v.cwd = dir.clone();
+            v.project = project;
+            v.status = Status::Booting;
+            let v = self.agent(bay).ok_or("That agent is closed.")?;
+            let spec = self.agent_spec(v, None, Vec::new(), None);
+            self.backend.send(Cmd::Create { bay, spec });
+            self.remember_dir(&dir);
+            if self.models.is_empty() {
+                self.backend.send(Cmd::ListModels);
+            }
+            return Ok(());
+        }
+        if crate::memory::project_key(&v.cwd) == crate::memory::project_key(&dir) {
+            return Ok(());
+        }
+        // A session that's still starting moves before any work, unless a first message is
+        // already on its way (it would run first, in the old folder).
+        let idle_start = v.status == Status::Booting && !v.items.iter().any(|i| matches!(i, Item::User { .. }));
+        if !idle_start && (v.status.is_busy() || v.status.needs_attention()) {
+            return Err("Wait for the agent to finish (or stop it) before moving it to another folder.".into());
+        }
+        self.backend.send(Cmd::SetCwd { bay, dir, project });
+        Ok(())
     }
 
     /// A new session the way the user set it up: in its own folder under the sessions folder
@@ -605,8 +651,8 @@ impl Core {
         view.deferred = false;
         view.status = Status::Booting;
         view.title = Some(text.clone());
-        let names = files.iter().map(|p| settings::dir_name(p)).collect();
-        view.echo_user_shown(&text, &sent, names, false);
+        let shown = files.iter().map(|p| p.display().to_string()).collect();
+        view.echo_user_shown(&text, &sent, shown, false);
         capture_explicit_memory(&memory, enabled, view, &text);
         let (name, user) = (view.name.clone().unwrap_or_else(|| sessions::short_title(&text)), view.name.is_some());
         let Some(view) = self.agent(bay) else { return };
@@ -622,7 +668,7 @@ impl Core {
     }
 
     fn agent_spec(&self, view: &AgentView, prompt: Option<String>, files: Vec<PathBuf>, resume: Option<String>) -> AgentSpec {
-        let memory = (self.settings.memory.enabled && !view.incognito).then(|| crate::agent::backend::AgentMemory { store: self.memory.clone(), project: view.project.clone() });
+        let memory = (self.settings.memory.enabled && !view.incognito).then(|| crate::agent::backend::AgentMemory::new(self.memory.clone(), view.project.clone()));
         // Choices made before the session existed (a deferred one) carry over.
         let model = view.model.clone().or_else(|| self.settings.default_model.clone());
         let effort = self.effort_for(model.as_deref().or(self.runtime_model.as_deref()), view.effort.clone().or_else(|| self.settings.default_effort.clone()));
@@ -675,10 +721,7 @@ impl Core {
 
     pub fn new_shell(&mut self, cwd: PathBuf, shell: Option<String>) -> BayId {
         let id = self.alloc_bay();
-        if !sessions::is_under(&cwd, &self.settings.sessions_root()) {
-            self.settings.push_recent_dir(&cwd);
-            self.settings_dirty = true;
-        }
+        self.remember_dir(&cwd);
         self.push_bay(Bay { id, kind: BayKind::Shell(ShellBay { cwd, shell, title: None }) });
         id
     }
@@ -981,6 +1024,22 @@ impl Core {
                     v.show_queued();
                     v.status = Status::Offline;
                 }
+            }
+            Evt::CwdChanged { bay, dir } => {
+                let project = self.project_for(&dir);
+                let shown = sessions::display_path(&dir, &self.settings.sessions_root());
+                let Some(v) = self.agent_mut(bay) else { return };
+                v.cwd = dir.clone();
+                v.project = project;
+                // An empty session shows its folder on its home screen; a conversation says where it went on.
+                if !v.items.is_empty() {
+                    v.notice(Level::Info, format!("Now working in {shown}"));
+                }
+                if let Some(id) = v.session_id.clone() {
+                    self.session_index.entry(&id).folder = Some(dir.display().to_string());
+                }
+                self.remember_dir(&dir);
+                self.dirty.sessions = true;
             }
             Evt::Event { bay, ev } => {
                 // A new session started without a model says which one the runtime picks (a resumed

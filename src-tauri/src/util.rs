@@ -113,6 +113,48 @@ pub fn read_text_head(path: &Path, max: usize) -> Result<Option<String>, String>
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
+/// Image files Graysense previews, by extension.
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "svg"];
+const PREVIEW_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+/// An image file's bytes, for a preview. Only image files (by extension), up to 50 MB.
+pub fn read_image(path: &Path) -> Result<Vec<u8>, String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!("{} isn't an image.", path.display()));
+    }
+    let failed = |e: std::io::Error| format!("Couldn't open {}: {e}", path.display());
+    let meta = std::fs::metadata(path).map_err(failed)?;
+    if !meta.is_file() {
+        return Err(format!("{} isn't an image.", path.display()));
+    }
+    if meta.len() > PREVIEW_MAX_BYTES {
+        return Err("That image is too big to preview.".into());
+    }
+    std::fs::read(path).map_err(failed)
+}
+
+/// `path` with `.` and `..` worked out without touching the disk, so it reads the way it was typed.
+pub fn tidy_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                // Nothing is above a drive's root.
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => out.push(".."),
+            },
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 const PASTED_PREFIX: &str = "pasted-image-";
 const PASTED_MAX_BYTES: usize = 50 * 1024 * 1024;
 /// Long enough to come back to a session, short enough that screenshots don't pile up.
@@ -209,6 +251,29 @@ mod tests {
         let names: Vec<String> = list_dir(&dir).unwrap().into_iter().map(|e| e.name).collect();
         assert_eq!(names, ["src", "A.md", "b.txt"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_image_files_are_read_for_previews() {
+        let dir = std::env::temp_dir().join(format!("gs-image-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("folder.png")).unwrap();
+        let png = dir.join("Shot.PNG");
+        std::fs::write(&png, b"\x89PNG\r\n\x1a\nrest").unwrap();
+        assert_eq!(read_image(&png).unwrap(), b"\x89PNG\r\n\x1a\nrest");
+        let text = dir.join("secrets.txt");
+        std::fs::write(&text, "token").unwrap();
+        assert!(read_image(&text).is_err());
+        assert!(read_image(&dir.join("folder.png")).is_err());
+        assert!(read_image(&dir.join("missing.png")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn paths_are_tidied_as_typed() {
+        assert_eq!(tidy_path(Path::new(r"C:\code\app\..\web\.\src\")), PathBuf::from(r"C:\code\web\src"));
+        assert_eq!(tidy_path(Path::new(r"C:\..\code")), PathBuf::from(r"C:\code"));
+        assert_eq!(tidy_path(Path::new(r"..\..\x")), PathBuf::from(r"..\..\x"));
     }
 
     #[test]

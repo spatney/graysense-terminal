@@ -1,12 +1,13 @@
 import { act as reactAct, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, completePath, newSession, savePastedImage } from '../../lib/api';
+import { act, changeFolder, completePath, newSession, savePastedImage } from '../../lib/api';
 import { useUi } from '../../lib/store';
 import type { BayDto, DirEntry } from '../../lib/types';
 import { Composer } from './Composer';
 
 vi.mock('../../lib/api', () => ({
   act: vi.fn(),
+  changeFolder: vi.fn(),
   completePath: vi.fn(),
   newSession: vi.fn(),
   newShell: vi.fn(),
@@ -138,6 +139,24 @@ describe('composer steering', () => {
     await waitFor(() => expect(act).toHaveBeenCalledWith({ type: 'send', bay: 1, text: 'Use tabs', queue: false }));
     fireEvent.keyDown(type('Then run it'), { key: 'Enter', ctrlKey: true });
     await waitFor(() => expect(act).toHaveBeenCalledWith({ type: 'send', bay: 1, text: 'Then run it', queue: true }));
+  });
+});
+
+describe('composer /cd', () => {
+  it('moves the session to a folder typed from where it is, home, or one picked', async () => {
+    useUi.setState({ app: { home: 'C:\\Users\\me', defaultDir: 'C:\\repo' } as any });
+    render(<Composer bay={bay} />);
+    fireEvent.keyDown(type('/cd ..\\web'), { key: 'Enter' });
+    await waitFor(() => expect(changeFolder).toHaveBeenCalledWith(1, 'C:\\repo\\..\\web'));
+    fireEvent.keyDown(type('/cd ~\\code'), { key: 'Enter' });
+    await waitFor(() => expect(changeFolder).toHaveBeenLastCalledWith(1, 'C:\\Users\\me\\code'));
+    fireEvent.keyDown(type('/cd "D:\\Work Items"'), { key: 'Enter' });
+    await waitFor(() => expect(changeFolder).toHaveBeenLastCalledWith(1, 'D:\\Work Items'));
+    fireEvent.keyDown(type('/cd'), { key: 'Enter' });
+    await waitFor(() => expect(changeFolder).toHaveBeenLastCalledWith(1));
+    // Nothing goes to the agent, and the box is cleared.
+    expect(act).not.toHaveBeenCalled();
+    expect(useUi.getState().drafts[1]).toBe('');
   });
 });
 

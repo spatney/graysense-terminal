@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { act, completePath, newSession, newShell, pickFiles, pickFolder, savePastedImage } from '../../lib/api';
+import { act, changeFolder, completePath, newSession, newShell, pickFiles, pickFolder, savePastedImage } from '../../lib/api';
 import { contextLabel, effortLabel, human } from '../../lib/format';
+import { isImagePath } from '../../lib/images';
 import { activeMention, completionQuery, insertMention, mentionedFiles } from '../../lib/mentions';
 import { fileIcon } from '../../lib/notes';
 import { setDraft, toast, useUi } from '../../lib/store';
 import type { BayDto, BayId, ContextSize, DirEntry, ModeId, ModelDto } from '../../lib/types';
+import { ImageThumb } from '../ImageThumb';
 import { Icon, Seg, showMenu, useAutosize } from '../ui';
 import { ModelPicker, useModelChoice } from './ModelPicker';
 
@@ -28,6 +30,7 @@ const SLASH: Slash[] = [
   { name: 'context', args: 'auto | <size>', desc: 'How much the agent holds before compacting (e.g. 1M)' },
   { name: 'mode', args: 'ask | plan | autopilot', desc: 'Change how much the agent does alone' },
   { name: 'attach', args: '[path]', desc: 'Attach files to the next message' },
+  { name: 'cd', args: '[folder]', desc: 'Move this session to another folder' },
   { name: 'rename', args: '<name>', desc: 'Name this session' },
   { name: 'learn', args: '', desc: 'Learn from this conversation now' },
   { name: 'clear', args: '', desc: 'Clear this transcript' },
@@ -211,6 +214,17 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
           const full = /^[a-zA-Z]:[\\/]|^\\\\/.test(p) ? p : `${bay.cwd}\\${p}`;
           await act({ type: 'attach', bay: bay.id, paths: [full] });
         }
+        return true;
+      }
+      case 'cd':
+      case 'cwd': {
+        if (!arg) {
+          await changeFolder(bay.id);
+          return true;
+        }
+        const p = arg.replace(/^"|"$/g, '');
+        const full = /^[a-zA-Z]:[\\/]|^\\\\/.test(p) ? p : /^[a-zA-Z]:$/.test(p) ? `${p}\\` : /^~([\\/]|$)/.test(p) && home ? `${home}${p.slice(1)}` : `${agent?.deferred ? defaultDir : bay.cwd}\\${p}`;
+        await changeFolder(bay.id, full);
         return true;
       }
       case 'rename':
@@ -462,15 +476,19 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
         )}
         {agent && agent.attachments.length > 0 && (
           <div className="composer-attachments">
-            {agent.attachments.map((a) => (
-              <span key={a.path} className="attach-chip" data-tip={a.path}>
-                <Icon name={fileIcon(a.name, a.isDir ? 'folder' : 'file')} />
-                <span className="ellipsis">{a.name}</span>
-                <button type="button" className="icon-btn sm" aria-label={`Remove ${a.name}`} onClick={() => void act({ type: 'detach', bay: bay!.id, path: a.path })}>
-                  <Icon name="close" />
-                </button>
-              </span>
-            ))}
+            {agent.attachments.map((a) => {
+              const detach = () => void act({ type: 'detach', bay: bay!.id, path: a.path });
+              const chip = (
+                <span key={a.path} className="attach-chip" data-tip={a.path}>
+                  <Icon name={fileIcon(a.name, a.isDir ? 'folder' : 'file')} />
+                  <span className="ellipsis">{a.name}</span>
+                  <button type="button" className="icon-btn sm" aria-label={`Remove ${a.name}`} onClick={detach}>
+                    <Icon name="close" />
+                  </button>
+                </span>
+              );
+              return !a.isDir && isImagePath(a.path) ? <ImageThumb key={a.path} path={a.path} className="attach-image" fallback={chip} onRemove={detach} /> : chip;
+            })}
           </div>
         )}
         <textarea

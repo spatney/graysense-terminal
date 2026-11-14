@@ -144,6 +144,79 @@
   gap: 5px;
 }
 
+.user-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Image thumbnails (messages, the message box, the Files panel); they open large when clicked. */
+.img-thumb {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--elev);
+}
+
+.img-thumb-open {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.img-thumb img {
+  display: block;
+  width: auto;
+  height: 120px;
+  min-width: 64px;
+  max-width: 260px;
+  object-fit: cover;
+}
+
+.img-thumb.loading .img-thumb-open {
+  width: 160px;
+  height: 120px;
+  background: var(--elev-2);
+}
+
+.img-thumb:hover {
+  border-color: var(--border-strong);
+}
+
+.img-thumb-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.img-thumb:hover .img-thumb-remove,
+.img-thumb-remove:focus-visible {
+  opacity: 1;
+}
+
+.img-thumb-remove .codicon {
+  font-size: 11px;
+}
+
 .msg-actions {
   display: flex;
   align-items: center;
@@ -902,8 +975,17 @@ button.file-chip:hover {
 .composer-attachments {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 10px 12px 0;
+}
+
+.img-thumb.attach-image .img-thumb-open,
+.img-thumb.attach-image img {
+  width: 52px;
+  height: 52px;
+  min-width: 0;
+  max-width: none;
 }
 
 .attach-chip {
@@ -2217,6 +2299,27 @@ button.file-chip:hover {
 
 .file-preview {
   margin-top: 10px;
+}
+
+.img-thumb.file-preview-image {
+  display: flex;
+  width: 100%;
+}
+
+.img-thumb.file-preview-image .img-thumb-open {
+  width: 100%;
+}
+
+.img-thumb.file-preview-image img {
+  width: 100%;
+  height: auto;
+  max-width: none;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.img-thumb.file-preview-image.loading .img-thumb-open {
+  height: 200px;
 }
 
 /* MCP app frames. */

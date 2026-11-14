@@ -1,0 +1,64 @@
+import { act, changeFolder, newShell, setSide } from '../lib/api';
+import { baseName, shortPath } from '../lib/format';
+import { useUi } from '../lib/store';
+import type { BayDto } from '../lib/types';
+import { type MenuItem, copyText } from './ui';
+
+/** How many recent folders a menu lists. */
+const SHOWN = 8;
+
+const pathKey = (p: string) => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+
+/** The folder `dir` is in ("C:\\code\\app" → "C:\\code"); a drive's root has none. */
+function parentOf(dir: string): string | null {
+  const t = dir.replace(/[\\/]+$/, '');
+  const i = Math.max(t.lastIndexOf('\\'), t.lastIndexOf('/'));
+  if (i <= 0) return null;
+  const p = t.slice(0, i);
+  return /^[a-zA-Z]:$/.test(p) ? `${p}\\` : p;
+}
+
+/** The recent folders, newest first, as menu rows (name, then where it is), leaving out `except`. */
+export function recentFolderItems(open: (dir: string) => void, except?: string | null): MenuItem[] {
+  const s = useUi.getState();
+  return (s.settings?.recent_dirs ?? [])
+    .filter((d) => !except || pathKey(d) !== pathKey(except))
+    .slice(0, SHOWN)
+    .map((dir) => {
+      const parent = parentOf(dir);
+      return { label: baseName(dir), detail: parent ? shortPath(parent, s.app?.home) : undefined, tip: dir, icon: 'folder', onSelect: () => open(dir) };
+    });
+}
+
+/**
+ * `label ›`: the recent folders, then "Choose a folder…". Before there are any recent folders,
+ * just `label…`, which goes straight to the folder picker.
+ */
+export function folderSubmenu(label: string, icon: string, open: (dir: string) => void, choose: () => void, except?: string | null): MenuItem {
+  const recent = recentFolderItems(open, except);
+  if (!recent.length) return { label: `${label}…`, icon, onSelect: choose };
+  return { label, icon, submenu: [...recent, { sep: true }, { label: 'Choose a folder…', icon: 'folder-opened', onSelect: choose }] };
+}
+
+/** An agent's folder menu: move the session to another folder, and the usual folder actions. */
+export function agentFolderItems(bay: BayDto): MenuItem[] {
+  const move = (dir: string) => void changeFolder(bay.id, dir);
+  const pick = () => void changeFolder(bay.id);
+  if (bay.agent?.deferred) {
+    return [
+      folderSubmenu('Start in a folder', 'arrow-swap', move, pick),
+      { sep: true },
+      { label: 'Sessions folder settings', icon: 'settings-gear', onSelect: () => void setSide('settings') },
+    ];
+  }
+  return [
+    folderSubmenu('Change folder', 'arrow-swap', move, pick, bay.cwd),
+    { sep: true },
+    { label: 'Reveal in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: bay.cwd }) },
+    { label: 'Open in VS Code', icon: 'vscode', onSelect: () => void act({ type: 'openInVsCode', path: bay.cwd }) },
+    { label: 'New terminal here', icon: 'terminal', onSelect: () => void newShell(bay.cwd) },
+    { label: 'New agent here', icon: 'add', onSelect: () => void act({ type: 'newAgent', dir: bay.cwd }) },
+    { sep: true },
+    { label: 'Copy path', icon: 'copy', onSelect: () => void copyText(bay.cwd, 'Path copied') },
+  ];
+}

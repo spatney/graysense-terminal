@@ -93,8 +93,13 @@ export function Tooltips() {
 
 // ------------------------------------------------------------------ menus
 
+/**
+ * A menu row. `detail` is dim text after the label that gives way first when space is short (a
+ * folder's location); `tip` is a tooltip. A `submenu` opens beside its row (one level deep).
+ */
 export type MenuItem =
-  | { label: string; icon?: string; hint?: string; danger?: boolean; checked?: boolean; disabled?: boolean; onSelect: () => void }
+  | { label: string; icon?: string; hint?: string; detail?: string; tip?: string; danger?: boolean; checked?: boolean; disabled?: boolean; onSelect: () => void }
+  | { label: string; icon?: string; tip?: string; disabled?: boolean; submenu: MenuItem[] }
   | { sep: true }
   | { section: string };
 
@@ -124,13 +129,68 @@ export function closeMenu() {
   useMenuStore.setState({ menu: null });
 }
 
+/** Rows that can be highlighted: actions and submenus that aren't disabled. */
+function selectable(items: MenuItem[]): number[] {
+  return items.flatMap((it, i) => (('onSelect' in it || 'submenu' in it) && !it.disabled ? [i] : []));
+}
+
+/** The selectable row after (or before) `from`, wrapping around; from none, the first (or last). */
+function stepRow(rows: number[], from: number, down: boolean): number {
+  if (!rows.length) return -1;
+  const at = rows.indexOf(from);
+  if (at < 0) return down ? rows[0] : rows[rows.length - 1];
+  return rows[(at + (down ? 1 : -1) + rows.length) % rows.length];
+}
+
+function MenuRows({ items, hot, open, onHover, onPick }: { items: MenuItem[]; hot: number; open?: number; onHover: (i: number) => void; onPick: (i: number) => void }) {
+  return (
+    <>
+      {items.map((it, i) => {
+        if ('sep' in it) return <div key={i} className="menu-sep" />;
+        if ('section' in it) return <div key={i} className="menu-label">{it.section}</div>;
+        if ('submenu' in it) {
+          return (
+            <button key={i} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={open === i} data-row={i} data-tip={it.tip} className={`menu-item ${hot === i || open === i ? 'hot' : ''}`} disabled={it.disabled} onPointerEnter={() => onHover(i)} onClick={() => onPick(i)}>
+              <Icon name={it.icon ?? 'blank'} />
+              <span className="ellipsis">{it.label}</span>
+              <Icon name="chevron-right" className="menu-more" />
+            </button>
+          );
+        }
+        return (
+          <button key={i} type="button" role="menuitem" data-row={i} data-tip={it.tip} className={`menu-item ${it.danger ? 'danger' : ''} ${hot === i ? 'hot' : ''} ${it.checked ? 'checked' : ''}`} disabled={it.disabled} onPointerEnter={() => onHover(i)} onClick={() => onPick(i)}>
+            <Icon name={it.checked ? 'check' : (it.icon ?? 'blank')} />
+            <span className="ellipsis">{it.label}</span>
+            {it.detail && <span className="menu-detail">{it.detail}</span>}
+            {it.hint && <span className="hint">{it.hint}</span>}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/** How long the pointer rests on a row before its submenu opens. */
+const SUBMENU_OPEN_MS = 90;
+/** Longer while another submenu is open, so moving diagonally toward that one doesn't switch it. */
+const SUBMENU_SWITCH_MS = 220;
+
 export function MenuHost() {
   const menu = useMenuStore((s) => s.menu);
+  const host = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const subRef = useRef<HTMLDivElement>(null);
+  const timer = useRef(0);
   const [hot, setHot] = useState(-1);
+  // The open submenu: its row in the menu, and its own highlighted row (-1 until the keyboard or pointer is in it).
+  const [sub, setSub] = useState<{ at: number; hot: number } | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [subPos, setSubPos] = useState<{ left: number; top: number } | null>(null);
+  const subAt = sub?.at ?? -1;
   useLayoutEffect(() => {
     setHot(-1);
+    setSub(null);
+    window.clearTimeout(timer.current);
     if (!menu || !ref.current) return setPos(null);
     const w = ref.current.offsetWidth;
     const h = ref.current.offsetHeight;
@@ -142,10 +202,23 @@ export function MenuHost() {
     setPos({ left, top });
     ref.current.focus();
   }, [menu]);
+  useLayoutEffect(() => {
+    const row = ref.current?.querySelector(`[data-row="${subAt}"]`);
+    if (!row || !ref.current || !subRef.current) return setSubPos(null);
+    const r = row.getBoundingClientRect();
+    const box = ref.current.getBoundingClientRect();
+    const w = subRef.current.offsetWidth;
+    const h = subRef.current.offsetHeight;
+    // Beside the menu, over its border; on the left when the right has no room.
+    let left = box.right - 3;
+    if (left + w > window.innerWidth - 6) left = Math.max(6, box.left - w + 3);
+    setSubPos({ left, top: Math.max(6, Math.min(r.top - 6, window.innerHeight - h - 6)) });
+  }, [subAt, pos]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   useEffect(() => {
     if (!menu) return;
     const down = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) closeMenu();
+      if (!host.current?.contains(e.target as Node)) closeMenu();
     };
     const blur = () => closeMenu();
     window.addEventListener('pointerdown', down, true);
@@ -158,41 +231,98 @@ export function MenuHost() {
     };
   }, [menu]);
   if (!menu) return null;
-  const actionable = menu.items.map((it, i) => ('onSelect' in it && !it.disabled ? i : -1)).filter((i) => i >= 0);
-  const pick = (i: number) => {
+  const parent = sub ? menu.items[sub.at] : undefined;
+  const subItems = parent && 'submenu' in parent ? parent.submenu : null;
+  const later = (fn: () => void, ms: number) => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(fn, ms);
+  };
+  const openSub = (i: number, keyboard: boolean) => {
     const it = menu.items[i];
+    if (!it || !('submenu' in it) || it.disabled) return;
+    window.clearTimeout(timer.current);
+    setHot(i);
+    setSub({ at: i, hot: keyboard ? stepRow(selectable(it.submenu), -1, true) : -1 });
+  };
+  const closeSub = () => {
+    window.clearTimeout(timer.current);
+    setSub(null);
+    ref.current?.focus();
+  };
+  const hover = (i: number) => {
+    setHot(i);
+    const it = menu.items[i];
+    if (sub?.at === i) window.clearTimeout(timer.current);
+    else if (it && 'submenu' in it && !it.disabled) later(() => openSub(i, false), sub ? SUBMENU_SWITCH_MS : SUBMENU_OPEN_MS);
+    else if (sub) later(closeSub, SUBMENU_SWITCH_MS);
+    else window.clearTimeout(timer.current);
+  };
+  const run = (it: MenuItem | undefined) => {
     if (it && 'onSelect' in it && !it.disabled) {
       closeMenu();
       it.onSelect();
     }
   };
+  const pick = (i: number) => {
+    const it = menu.items[i];
+    if (it && 'submenu' in it) openSub(i, false);
+    else run(it);
+  };
   const key = (e: React.KeyboardEvent) => {
+    const down = e.key === 'ArrowDown';
+    if (sub && sub.hot >= 0 && subItems) {
+      if (down || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSub({ ...sub, hot: stepRow(selectable(subItems), sub.hot, down) });
+      } else if (e.key === 'ArrowLeft' || e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSub();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        run(subItems[sub.hot]);
+      }
+      return;
+    }
     if (e.key === 'Escape') {
       e.stopPropagation();
-      closeMenu();
-    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (sub) closeSub();
+      else closeMenu();
+    } else if (down || e.key === 'ArrowUp') {
       e.preventDefault();
-      const at = actionable.indexOf(hot);
-      const next = e.key === 'ArrowDown' ? actionable[(at + 1) % actionable.length] : actionable[(at - 1 + actionable.length) % actionable.length];
-      setHot(next ?? -1);
-    } else if (e.key === 'Enter' && hot >= 0) {
-      e.preventDefault();
-      pick(hot);
+      if (sub) closeSub();
+      setHot(stepRow(selectable(menu.items), hot, down));
+    } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
+      const it = menu.items[hot];
+      if (it && 'submenu' in it) {
+        e.preventDefault();
+        openSub(hot, true);
+      } else if (e.key === 'Enter' && hot >= 0) {
+        e.preventDefault();
+        run(it);
+      }
     }
   };
   return createPortal(
-    <div ref={ref} className="menu" role="menu" tabIndex={-1} onKeyDown={key} style={pos ?? { left: -9999, top: -9999 }} onContextMenu={(e) => e.preventDefault()}>
-      {menu.items.map((it, i) => {
-        if ('sep' in it) return <div key={i} className="menu-sep" />;
-        if ('section' in it) return <div key={i} className="menu-label">{it.section}</div>;
-        return (
-          <button key={i} type="button" role="menuitem" className={`menu-item ${it.danger ? 'danger' : ''} ${hot === i ? 'hot' : ''} ${it.checked ? 'checked' : ''}`} disabled={it.disabled} onPointerEnter={() => setHot(i)} onClick={() => pick(i)}>
-            <Icon name={it.checked ? 'check' : (it.icon ?? 'blank')} />
-            <span className="ellipsis">{it.label}</span>
-            {it.hint && <span className="hint">{it.hint}</span>}
-          </button>
-        );
-      })}
+    <div ref={host} className="menu-host" onKeyDown={key} onContextMenu={(e) => e.preventDefault()}>
+      <div ref={ref} className="menu" role="menu" tabIndex={-1} style={pos ?? { left: -9999, top: -9999 }}>
+        <MenuRows items={menu.items} hot={hot} open={sub?.at} onHover={hover} onPick={pick} />
+      </div>
+      {sub && subItems && (
+        <div
+          ref={subRef}
+          className="menu menu-sub"
+          role="menu"
+          tabIndex={-1}
+          style={subPos ?? { left: -9999, top: -9999 }}
+          onPointerEnter={() => {
+            window.clearTimeout(timer.current);
+            setHot(sub.at);
+          }}
+        >
+          <MenuRows items={subItems} hot={sub.hot} onHover={(j) => setSub((s) => (s ? { ...s, hot: j } : s))} onPick={(j) => run(subItems[j])} />
+        </div>
+      )}
     </div>,
     document.body,
   );
@@ -233,7 +363,7 @@ export class Boundary extends Component<{ children: ReactNode; label: string }, 
 
 // ------------------------------------------------------------------ modal
 
-export function Modal({ onClose, children, width = 520, className = '', labelledBy }: { onClose: () => void; children: ReactNode; width?: number; className?: string; labelledBy?: string }) {
+export function Modal({ onClose, children, width = 520, className = '', labelledBy }: { onClose: () => void; children: ReactNode; width?: number | 'auto'; className?: string; labelledBy?: string }) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

@@ -3,6 +3,20 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.2.3 — 2026-11-14
+
+- **Recent folders, a hover away**: in the ⌄ menu beside +, **New agent in folder** and **New
+  terminal in folder** now list the folders you've worked in lately, with **Choose a folder…**
+  for any other.
+- **Move a session to another folder**: click the folder beside a session's title and choose
+  **Change folder**, type `/cd <folder>` (`/cd` alone lets you pick one), or use the command
+  palette. The agent's commands, file lookups, permissions, project instructions and memory follow
+  it there. A new session that hasn't started yet can start in a folder you choose instead of
+  getting its own.
+- **Image previews**: attached images show as thumbnails in the message box, in your messages and
+  in the Files panel. Click one to see it large, with buttons to open it, show it in File Explorer
+  or copy its path.
+
 ## 0.2.2 — 2026-11-13
 
 - **Choose the context window**: for models that have a long window (such as 1M tokens on Claude

@@ -92,6 +92,7 @@ fn main() {
             commands::complete_path,
             commands::save_pasted_image,
             commands::read_text,
+            commands::read_image,
             commands::terminal_shells,
             commands::terminal_spawn,
             commands::terminal_write,

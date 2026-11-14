@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { act, captureNote, newShell, setSide } from '../../lib/api';
+import { act, captureNote, setSide } from '../../lib/api';
 import { setDock, useUi } from '../../lib/store';
 import type { BayDto, ItemDto } from '../../lib/types';
+import { agentFolderItems } from '../folders';
 import { statusClass } from '../Strip';
-import { Icon, type MenuItem, copyText, showMenu } from '../ui';
+import { Icon, type MenuItem, showMenu } from '../ui';
 import { Composer } from './Composer';
 import { Dock } from './Dock';
 import { Hero } from './Hero';
@@ -24,17 +25,7 @@ function BayHead({ bay }: { bay: BayDto }) {
     setRenaming(null);
   };
 
-  const folderMenu = (anchor: Element) => {
-    const items: MenuItem[] = [
-      { label: 'Reveal in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: bay.cwd }) },
-      { label: 'Open in VS Code', icon: 'vscode', onSelect: () => void act({ type: 'openInVsCode', path: bay.cwd }) },
-      { label: 'New terminal here', icon: 'terminal', onSelect: () => void newShell(bay.cwd) },
-      { label: 'New agent here', icon: 'add', onSelect: () => void act({ type: 'newAgent', dir: bay.cwd }) },
-      { sep: true },
-      { label: 'Copy path', icon: 'copy', onSelect: () => void copyText(bay.cwd, 'Path copied') },
-    ];
-    showMenu(anchor, items);
-  };
+  const folderMenu = (anchor: Element) => showMenu(anchor, agentFolderItems(bay));
 
   const moreMenu = (anchor: Element) => {
     const items: MenuItem[] = [

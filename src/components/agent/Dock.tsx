@@ -3,9 +3,11 @@ import { listen } from '@tauri-apps/api/event';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { act, listDir, openLink, readText } from '../../lib/api';
 import { ago, baseName, bytes } from '../../lib/format';
+import { isImagePath } from '../../lib/images';
 import { focusComposer, setDock, toast, useUi } from '../../lib/store';
 import { cssVar } from '../../lib/theme';
 import type { BayDto, CanvasDto, DirEntry } from '../../lib/types';
+import { ImageThumb } from '../ImageThumb';
 import { CodeBlock, Markdown } from '../Markdown';
 import { Icon, type MenuItem, copyText, showMenu } from '../ui';
 
@@ -377,7 +379,7 @@ function FilesView({ bay }: { bay: BayDto }) {
   const [dir, setDir] = useState(root);
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ path: string; text: string | null } | null>(null);
+  const [preview, setPreview] = useState<{ path: string; text: string | null; image?: boolean } | null>(null);
   const [tick, setTick] = useState(0);
   const busy = bay.agent?.status.busy;
 
@@ -398,6 +400,7 @@ function FilesView({ bay }: { bay: BayDto }) {
 
   const rel = dir.length > root.length ? dir.slice(root.length).split(/[\\/]/).filter(Boolean) : [];
   const show = async (path: string) => {
+    if (isImagePath(path)) return setPreview({ path, text: null, image: true });
     const text = await readText(path).catch(() => null);
     setPreview({ path, text: text ?? null });
   };
@@ -456,7 +459,15 @@ function FilesView({ bay }: { bay: BayDto }) {
               <Icon name="close" />
             </button>
           </div>
-          {preview.text == null ? <div className="faint">No preview for this file.</div> : /\.md$/i.test(preview.path) ? <Markdown text={preview.text} /> : <CodeBlock code={preview.text} lang={preview.path.split('.').pop()} maxHeight={420} />}
+          {preview.image ? (
+            <ImageThumb key={preview.path} path={preview.path} className="file-preview-image" fallback={<div className="faint">No preview for this file.</div>} />
+          ) : preview.text == null ? (
+            <div className="faint">No preview for this file.</div>
+          ) : /\.md$/i.test(preview.path) ? (
+            <Markdown text={preview.text} />
+          ) : (
+            <CodeBlock code={preview.text} lang={preview.path.split('.').pop()} maxHeight={420} />
+          )}
         </div>
       )}
     </div>

@@ -179,7 +179,8 @@ pub struct SubagentCard {
 }
 
 pub enum Item {
-    /// `took`: how long the agent worked on it, in ms (from the turn's first to its last event).
+    /// `files`: attached files' full paths (a name for attachments without one). `took`: how long
+    /// the agent worked on it, in ms (from the turn's first to its last event).
     User { text: String, files: Vec<String>, took: Option<u64> },
     Assistant { text: String, done: bool },
     Reasoning { text: String, done: bool },
@@ -658,6 +659,12 @@ impl AgentView {
                     self.status = Status::Idle;
                 }
             }
+            "session.context_changed" => {
+                // The session moved to another folder (Graysense's Change folder, or `/cd` elsewhere).
+                if let Some(cwd) = s(d, "cwd").filter(|c| !c.is_empty()) {
+                    self.cwd = PathBuf::from(cwd);
+                }
+            }
             "user.message" => {
                 let source = s(d, "source").unwrap_or_default();
                 let sent = s(d, "content").unwrap_or_default();
@@ -673,14 +680,11 @@ impl AgentView {
                         self.push(Item::User { text: m.text, files: m.files, took: None });
                     }
                 } else {
+                    // Full paths, so images can be previewed (a name for attachments without one).
                     let files = d
                         .get("attachments")
                         .and_then(|a| a.as_array())
-                        .map(|list| {
-                            list.iter()
-                                .filter_map(|a| s(a, "displayName").or_else(|| s(a, "path").map(|p| crate::settings::dir_name(std::path::Path::new(&p)))))
-                                .collect()
-                        })
+                        .map(|list| list.iter().filter_map(|a| s(a, "path").or_else(|| s(a, "displayName"))).collect())
                         .unwrap_or_default();
                     self.push(Item::User { text: content.clone(), files, took: None });
                 }
@@ -1087,6 +1091,24 @@ mod tests {
         let notices: Vec<&str> = v.items.iter().filter_map(|i| if let Item::Notice { text, .. } = i { Some(text.as_str()) } else { None }).collect();
         assert_eq!(notices, ["Context compacted to free up space", "Couldn't compact the context: The summarizer timed out"]);
         assert!(matches!(v.items.last(), Some(Item::Notice { level: Level::Warn, .. })));
+    }
+
+    #[test]
+    fn attachments_keep_their_paths_and_the_folder_follows_the_session() {
+        let mut v = AgentView::new(1, PathBuf::from(r"C:\code\app"), Mode::Interactive);
+        v.apply(&ev(
+            "1",
+            "user.message",
+            json!({ "content": "What's wrong here?", "attachments": [
+                { "type": "file", "path": r"C:\shots\error.png", "displayName": "error.png" },
+                { "type": "selection", "filePath": r"C:\code\app\main.rs", "displayName": "main.rs:3-9" },
+            ] }),
+        ));
+        assert!(matches!(v.items.first(), Some(Item::User { files, .. }) if files == &[r"C:\shots\error.png", "main.rs:3-9"]));
+        // Moved to another folder (the runtime says so first, then again with the git details).
+        v.apply(&ev("2", "session.context_changed", json!({ "cwd": r"C:\code\web", "pendingGitContext": true })));
+        v.apply(&ev("3", "session.context_changed", json!({ "cwd": r"C:\code\web", "branch": "main" })));
+        assert_eq!(v.cwd, PathBuf::from(r"C:\code\web"));
     }
 
     #[test]

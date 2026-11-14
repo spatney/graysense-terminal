@@ -16,7 +16,7 @@ use github_copilot_sdk::rpc::{
     CanvasProviderCloseRequest, CanvasProviderInvokeActionRequest, CanvasProviderOpenRequest, CanvasProviderOpenResult,
     McpAppsCallToolRequest, McpAppsReadResourceRequest, McpConfigAddRequest, McpConfigDisableRequest,
     McpConfigEnableRequest, McpConfigRemoveRequest, McpConfigUpdateRequest, McpDiscoverRequest, McpListToolsRequest,
-    McpRestartServerRequest, McpStartServerRequest, McpStopServerRequest, ModeSetRequest, ModelSwitchToRequest,
+    McpRestartServerRequest, McpStartServerRequest, McpStopServerRequest, MetadataSetWorkingDirectoryRequest, ModeSetRequest, ModelSwitchToRequest,
     PermissionDecision, PluginsDisableRequest, PluginsEnableRequest, PluginsInstallRequest,
     PluginsMarketplacesAddRequest, PluginsMarketplacesBrowseRequest, PluginsMarketplacesRemoveRequest,
     PluginsUninstallRequest, PluginsUpdateRequest,
@@ -84,7 +84,18 @@ pub enum Change {
 #[derive(Clone)]
 pub struct AgentMemory {
     pub store: Arc<parking_lot::Mutex<crate::memory::MemoryStore>>,
-    pub project: crate::memory::Project,
+    /// The project the agent works in; it changes when the session moves to another folder.
+    pub project: Arc<parking_lot::RwLock<crate::memory::Project>>,
+}
+
+impl AgentMemory {
+    pub fn new(store: Arc<parking_lot::Mutex<crate::memory::MemoryStore>>, project: crate::memory::Project) -> Self {
+        Self { store, project: Arc::new(parking_lot::RwLock::new(project)) }
+    }
+
+    fn project(&self) -> crate::memory::Project {
+        self.project.read().clone()
+    }
 }
 
 pub enum Cmd {
@@ -95,6 +106,8 @@ pub enum Cmd {
     Abort { bay: BayId },
     SetModel { bay: BayId, model: String, effort: Change, tier: Change },
     SetMode { bay: BayId, mode: Mode },
+    /// Move a session to another folder; memory follows it to `project` once the runtime agrees.
+    SetCwd { bay: BayId, dir: PathBuf, project: crate::memory::Project },
     Close { bay: BayId },
     ListModels,
     ListSessions,
@@ -259,6 +272,8 @@ pub enum Evt {
     SessionReady { bay: BayId, session_id: String },
     SessionFailed { bay: BayId, error: String },
     SessionClosed { bay: BayId },
+    /// The session now works in `dir` (after [`Cmd::SetCwd`]).
+    CwdChanged { bay: BayId, dir: PathBuf },
     Event { bay: BayId, ev: Box<SessionEvent> },
     History { bay: BayId, events: Vec<SessionEvent> },
     Notice { bay: BayId, error: bool, text: String },
@@ -344,7 +359,7 @@ fn needs_client(cmd: &Cmd) -> bool {
 
 fn bay_of(cmd: &Cmd) -> Option<BayId> {
     match cmd {
-        Cmd::Send { bay, .. } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
+        Cmd::Send { bay, .. } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::SetCwd { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
         Cmd::App(AppCmd::CallTool { bay, .. }) | Cmd::App(AppCmd::ReadResource { bay, .. }) => Some(*bay),
         Cmd::Mcp(McpCmd::Tools { bay, .. }) | Cmd::Mcp(McpCmd::Restart { bay, .. }) | Cmd::Mcp(McpCmd::Stop { bay, .. }) | Cmd::Mcp(McpCmd::Start { bay, .. }) => Some(*bay),
         _ => None,
@@ -354,6 +369,8 @@ fn bay_of(cmd: &Cmd) -> Option<BayId> {
 async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSender<Cmd>, ui: UiTx) {
     let mut client: Option<Client> = None;
     let mut sessions: HashMap<BayId, Arc<Session>> = HashMap::new();
+    // Each agent's memory handle, so its project can follow the session to another folder.
+    let mut memories: HashMap<BayId, AgentMemory> = HashMap::new();
     let mut starting: HashSet<BayId> = HashSet::new();
     let mut parked: HashMap<BayId, Vec<Cmd>> = HashMap::new();
     let mut backlog: VecDeque<Cmd> = VecDeque::new();
@@ -403,6 +420,10 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
             Cmd::Create { bay, spec } => {
                 let Some(c) = client.clone() else { continue };
                 starting.insert(bay);
+                match &spec.memory {
+                    Some(m) => memories.insert(bay, m.clone()),
+                    None => memories.remove(&bay),
+                };
                 let ui = ui.clone();
                 let self_tx = self_tx.clone();
                 tokio::spawn(async move {
@@ -423,6 +444,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
             Cmd::StartFailed { bay, error } => {
                 starting.remove(&bay);
                 parked.remove(&bay);
+                memories.remove(&bay);
                 ui.send(Evt::SessionFailed { bay, error });
             }
             Cmd::Registered { bay, session, prompt, files, mode, resumed } => {
@@ -521,7 +543,26 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     }
                 });
             }
+            Cmd::SetCwd { bay, dir, project } => {
+                let s = sessions[&bay].clone();
+                let memory = memories.get(&bay).cloned();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    let req = MetadataSetWorkingDirectoryRequest { working_directory: dir.display().to_string() };
+                    match s.rpc().metadata().set_working_directory(req).await {
+                        Ok(r) => {
+                            if let Some(m) = memory {
+                                *m.project.write() = project;
+                            }
+                            let dir = if r.working_directory.is_empty() { dir } else { PathBuf::from(r.working_directory) };
+                            ui.send(Evt::CwdChanged { bay, dir });
+                        }
+                        Err(e) => ui.send(Evt::Notice { bay, error: true, text: format!("Couldn't move to {}: {e}", dir.display()) }),
+                    }
+                });
+            }
             Cmd::Close { bay } => {
+                memories.remove(&bay);
                 if let Some(s) = sessions.remove(&bay) {
                     tokio::spawn(async move {
                         let _ = s.disconnect().await;
@@ -1046,7 +1087,7 @@ impl Bridge {
             Some("memory") => true,
             Some("commands") if pr.get("warning").is_none() => {
                 let cmds: Vec<String> = pr.get("commandIdentifiers").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default();
-                mem.store.lock().rule_allows(&mem.project.key, &cmds)
+                mem.store.lock().rule_allows(&mem.project().key, &cmds)
             }
             _ => false,
         }
@@ -1573,7 +1614,8 @@ impl github_copilot_sdk::hooks::SessionHooks for MemoryHooks {
             return None;
         }
         let first = !self.started.swap(true, Ordering::SeqCst);
-        let project = Some(&self.memory.project);
+        let current = self.memory.project();
+        let project = Some(&current);
         // Notes the user asked about come attached to the prompt already; don't add them again.
         let (asked, included) = crate::memory::split_included(&input.prompt);
         let skip = {
@@ -1642,7 +1684,7 @@ impl github_copilot_sdk::MemoryStore for LocalMemory {
         } else {
             Kind::Fact
         };
-        let scope = if about_user { Scope::Global } else { self.memory.project.scope() };
+        let scope = if about_user { Scope::Global } else { self.memory.project().scope() };
         let quote = [m.reason.trim(), m.citations.trim()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
         let source = Source { session: Some(m.session_id.to_string()), title: None, quote: (!quote.is_empty()).then_some(quote), at: crate::memory::now() };
         let id = self.memory.store.lock().insert(kind, scope, &fact, Origin::Agent, State::Active, 0.9, Some(source));
@@ -1667,9 +1709,10 @@ impl ToolHandler for RecallTool {
             return Ok(ToolResult::Text("Graysense memory is turned off.".into()));
         }
         let query = inv.arguments.get("query").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        let project = self.memory.project();
         let mut store = self.memory.store.lock();
         let hits: Vec<(u64, String)> = store
-            .search(&query, Some(&self.memory.project), 8)
+            .search(&query, Some(&project), 8)
             .into_iter()
             .map(|m| (m.id, if m.kind == crate::memory::Kind::Note { crate::memory::MemoryStore::note_for_agent(m) } else { format!("- ({}) {}", m.kind.label(), m.text) }))
             .collect();

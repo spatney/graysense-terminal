@@ -31,8 +31,8 @@ signed in (`copilot login`).
   asking, including commands and file changes. Off by default; existing and resumed sessions
   are unchanged. Each session still has its own approval toggle.
 - **Ask / Plan / Autopilot** modes (Shift+Tab), a context meter, Esc to stop, ↑ for earlier
-  messages, and slash commands (`/model`, `/effort`, `/context`, `/mode`, `/attach`, `/rename`,
-  `/learn`, `/clear`, `/stop`, `/terminal`, `/new`).
+  messages, and slash commands (`/model`, `/effort`, `/context`, `/mode`, `/attach`, `/cd`,
+  `/rename`, `/learn`, `/clear`, `/stop`, `/terminal`, `/new`).
 - **Steer the agent while it works**: Enter sends a message that Copilot reads at its next step,
   without waiting for the turn to finish. Ctrl+Enter queues it for after the turn instead.
 - **A model picker with thinking levels and context windows**: models grouped into Powerful,
@@ -51,6 +51,8 @@ signed in (`copilot login`).
   message box to attach it to the next message; pasting on the home screen starts a session.
   Pasted images are kept in `%APPDATA%\Graysense\pasted-images`; ones older than 30 days are
   deleted the next time you paste.
+  **Images preview** as thumbnails in the message box, in your messages and in the Files panel;
+  click one to see it large, with buttons to open it, reveal it or copy its path.
 
 **Notes: a bucket for context you'll need later**
 - Save what happened — *"When Charles asked for the Rayfin logo, I sent him the dark version"* —
@@ -76,6 +78,11 @@ signed in (`copilot login`).
   choose (`~\Graysense\Sessions` by default). A history sidebar (Ctrl+Shift+H): open sessions,
   pinned, then Today / Yesterday / Previous 7 days…, with rename, pin, reveal and delete, plus an
   activity feed. Sessions started in the Copilot CLI are listed too.
+- **Move a session to another folder** at any time: click the folder beside its title (or on its
+  home screen) and choose **Change folder**, type `/cd <folder>` (`/cd` alone picks one), or use
+  the command palette. The agent's commands, file lookups, permissions, project instructions and
+  memory follow it there. A new session that hasn't started yet starts in the folder you choose
+  instead of getting its own.
 - **Search everything** (Ctrl+K): notes, session names and conversations, and the contents of every
   file in your sessions folder, with highlighted snippets and line numbers.
 - Each agent has a side panel with its **files** (open the folder in VS Code from there), the
@@ -84,6 +91,9 @@ signed in (`copilot login`).
 **Bays and terminals**
 - Tile agents and terminals in a grid, columns, rows or one at a time; drag tabs to reorder;
   maximize with Ctrl+Shift+Enter.
+- **Recent folders** are a hover away: in the ⌄ menu beside +, **New agent in folder ›** and
+  **New terminal in folder ›** list the folders you've worked in lately, with **Choose a folder…**
+  for any other.
 - Real terminals (PowerShell, Command Prompt, Git Bash or WSL) through ConPTY with xterm.js and
   WebGL: find, copy and paste, clickable links, and flow control so floods of output never freeze
   the app. Drop files on a terminal to type their paths.

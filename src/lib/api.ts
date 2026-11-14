@@ -40,6 +40,8 @@ export const completePath = (directory: string, prefix: string) => invoke<DirEnt
 /** Keep a pasted image's bytes where Graysense saves pasted images; resolves to its path. */
 export const savePastedImage = (bytes: Uint8Array) => invoke<string>('save_pasted_image', bytes);
 export const readText = (path: string) => invoke<string | null>('read_text', { path });
+/** An image file's bytes, for a preview (the core only reads image files). */
+export const readImage = (path: string) => invoke<ArrayBuffer>('read_image', { path });
 
 /** Run what a toast's button asks for (an action, or a link). */
 export function runToastAction(action: any) {
@@ -111,9 +113,26 @@ export async function newSession(prompt?: string, incognito = false) {
 
 export async function newAgentIn() {
   const dir = await pickFolder('Open an agent in a folder', useUi.getState().app?.defaultDir);
-  if (!dir) return;
+  if (dir) await newAgent(dir);
+}
+
+/** A new agent working in `dir`, ready to type to. */
+export async function newAgent(dir: string) {
   const bay = await act<BayId>({ type: 'newAgent', dir });
   if (bay != null) focusComposer(bay);
+  return bay;
+}
+
+/**
+ * Move an agent to another folder (`dir`, or one the user picks). A session that hasn't started
+ * yet starts there instead of in a new session folder.
+ */
+export async function changeFolder(bay: BayId, dir?: string) {
+  const s = useUi.getState();
+  const b = s.bays.find((x) => x.id === bay);
+  const target = dir ?? (await pickFolder('Move this session to a folder', b && !b.agent?.deferred ? b.cwd : s.app?.defaultDir));
+  if (!target) return;
+  if ((await act({ type: 'changeFolder', bay, dir: target })) !== undefined) focusComposer(bay);
 }
 
 export async function newShell(dir?: string | null) {

@@ -168,6 +168,12 @@ pub fn read_text(path: String) -> Result<Option<String>, String> {
     crate::util::read_text_head(Path::new(&path), 256 * 1024)
 }
 
+/// An image file's bytes, for a preview (only image files).
+#[tauri::command(async)]
+pub fn read_image(path: String) -> Result<tauri::ipc::Response, String> {
+    crate::util::read_image(Path::new(&path)).map(tauri::ipc::Response::new)
+}
+
 // ------------------------------------------------------------------ terminals
 
 #[tauri::command(async)]

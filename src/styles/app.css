@@ -661,6 +661,43 @@ button.status-item:hover {
   padding: 20px 22px;
 }
 
+/* An image, large. */
+.image-viewer {
+  min-width: 380px;
+}
+
+.image-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+}
+
+.image-viewer-head h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.image-viewer-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.image-viewer-body img {
+  display: block;
+  max-width: calc(100vw - 96px);
+  max-height: calc(76vh - 80px);
+  object-fit: contain;
+  border-radius: 6px;
+}
+
 .modal-body h3 {
   margin: 0 0 6px;
   font-size: 15px;

@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { act, newAgentIn, newSession, newShell, newShellIn } from '../lib/api';
+import { act, newAgent, newAgentIn, newSession, newShell, newShellIn } from '../lib/api';
 import { focusComposer, openOverlay, useUi } from '../lib/store';
 import type { BayDto, LayoutId } from '../lib/types';
+import { folderSubmenu } from './folders';
 import { Icon, Kbd, type MenuItem, showMenu } from './ui';
 
 const LAYOUTS: { id: LayoutId; label: string; icon: string }[] = [
@@ -24,10 +25,10 @@ export function newMenu(anchor: Element) {
   const items: MenuItem[] = [
     { label: 'New session', icon: 'comment-discussion', hint: 'Ctrl+Shift+N', onSelect: () => void newSession() },
     { label: 'New incognito session', icon: 'eye-closed', onSelect: () => void newSession(undefined, true) },
-    { label: 'New agent in folder…', icon: 'folder-opened', onSelect: () => void newAgentIn() },
+    folderSubmenu('New agent in folder', 'folder-opened', (dir) => void newAgent(dir), () => void newAgentIn()),
     { sep: true },
     { label: 'New terminal', icon: 'terminal', hint: 'Ctrl+Shift+T', onSelect: () => void newShell() },
-    { label: 'New terminal in folder…', icon: 'folder', onSelect: () => void newShellIn() },
+    folderSubmenu('New terminal in folder', 'folder', (dir) => void newShell(dir), () => void newShellIn()),
   ];
   showMenu(anchor, items);
 }
