@@ -29,6 +29,7 @@ impl Since {
 use github_copilot_sdk::SessionEvent;
 use github_copilot_sdk::handler::{AutoModeSwitchResponse, ExitPlanModeResult};
 use github_copilot_sdk::types::ElicitationResult;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
@@ -223,9 +224,38 @@ pub struct QueuedMessage {
 /// A message sent from here whose `user.message` hasn't come back yet.
 struct Echo {
     sent: String,
+    message: QueuedMessage,
     /// Not shown in the transcript yet (sent mid-turn).
-    queued: Option<QueuedMessage>,
+    queued: bool,
+    /// Stopping the turn it waited on cleared it from the runtime: it's never sent again.
+    dropped: bool,
 }
+
+/// A message the agent hadn't read when Graysense closed. The runtime doesn't keep those, so it's
+/// sent again when the session reopens.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Unread {
+    pub text: String,
+    /// What was sent, when it carried more than the transcript shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub steer: bool,
+}
+
+/// Work that Graysense closing interrupted, picked up once the session is back.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CarryOn {
+    /// Copilot was working (or waiting on the user), so it's asked to pick up where it left off.
+    pub working: bool,
+    pub unread: Vec<Unread>,
+}
+
+/// What Graysense tells an agent that was working when it closed, once its session is back. It's
+/// sent as the app's message, so the transcript shows it as a notice rather than the user's words.
+pub const CARRY_ON_PROMPT: &str = "Graysense closed while you were working, which cut your last turn short. Pick up where you left off and finish what you were doing. Anything that was still running when it closed may not have finished, so check before you redo it.";
 
 /// A line for the global COMMS log.
 #[derive(Clone)]
@@ -310,6 +340,11 @@ pub struct AgentView {
     pub deferred: bool,
     /// Name the user gave this session.
     pub name: Option<String>,
+    /// The runtime keeps this session (it has had a message), so reopening it resumes the
+    /// conversation, even while the transcript is empty (resuming, or after `/clear`).
+    pub has_history: bool,
+    /// Restored with work Graysense closing interrupted: carried on once the history is back.
+    pub carry_on: Option<CarryOn>,
 }
 
 /// An MCP App view docked in an agent bay.
@@ -464,6 +499,8 @@ impl AgentView {
             approval_log: Vec::new(),
             deferred: false,
             name: None,
+            has_history: false,
+            carry_on: None,
         }
     }
 
@@ -501,33 +538,86 @@ impl AgentView {
     /// agent reads it: at its next step if `steer`, else after the turn.
     pub fn echo_user_shown(&mut self, shown: &str, sent: &str, files: Vec<String>, steer: bool) {
         let mid_turn = matches!(self.status, Status::Thinking | Status::Streaming | Status::Tool(_) | Status::Waiting(_) | Status::Compacting);
-        let queued = if mid_turn {
-            Some(QueuedMessage { text: shown.to_owned(), files, steer })
-        } else {
-            self.push(Item::User { text: shown.to_owned(), files, took: None });
+        let message = QueuedMessage { text: shown.to_owned(), files, steer };
+        if !mid_turn {
+            self.push(Item::User { text: message.text.clone(), files: message.files.clone(), took: None });
             if !self.status.is_busy() {
                 self.status = Status::Thinking;
                 self.busy_since = Some(Since::now());
             }
-            None
-        };
-        self.local_echo.push_back(Echo { sent: sent.trim().to_owned(), queued });
+        }
+        self.local_echo.push_back(Echo { sent: sent.trim().to_owned(), message, queued: mid_turn, dropped: false });
         self.sent_history.push(shown.to_owned());
+        self.has_history = true;
     }
 
     /// Messages sent mid-turn that the agent hasn't read yet, oldest first.
     pub fn queued(&self) -> impl Iterator<Item = &QueuedMessage> {
-        self.local_echo.iter().filter_map(|e| e.queued.as_ref())
+        self.local_echo.iter().filter(|e| e.queued).map(|e| &e.message)
     }
 
     /// Put the messages still waiting into the transcript, once the turn they waited on is over
     /// (their echo is still matched, so they don't show twice if the agent reads them later).
     pub fn show_queued(&mut self) {
-        for e in self.local_echo.iter_mut() {
-            if let Some(m) = e.queued.take() {
-                self.items.push(Item::User { text: m.text, files: m.files, took: None });
+        for e in self.local_echo.iter_mut().filter(|e| e.queued) {
+            e.queued = false;
+            self.items.push(Item::User { text: e.message.text.clone(), files: e.message.files.clone(), took: None });
+        }
+    }
+
+    /// A message the runtime never got: its echo won't come back, it isn't sent again, and one that
+    /// was to start a turn leaves the agent idle.
+    pub fn send_failed(&mut self, sent: &str) {
+        let was_starting = match self.local_echo.iter().position(|e| e.sent == sent.trim()) {
+            Some(at) => self.local_echo.remove(at).is_some_and(|e| !e.queued),
+            None => sent == CARRY_ON_PROMPT,
+        };
+        if was_starting && self.status == Status::Thinking {
+            self.status = Status::Idle;
+            self.busy_since = None;
+        }
+    }
+
+    /// What closing Graysense now would interrupt: whether Copilot is working (or waiting on the
+    /// user), and the messages it hasn't read yet.
+    pub fn unfinished(&self) -> (bool, Vec<Unread>) {
+        let carried = self.carry_on.as_ref();
+        // A session that's still starting isn't working on anything yet.
+        let working = carried.is_some_and(|c| c.working) || self.status.needs_attention() || (self.status.is_busy() && self.status != Status::Booting);
+        // Messages wait on a turn in progress; with none, they were read or dropped.
+        if !working {
+            return (false, Vec::new());
+        }
+        let mut unread = carried.map(|c| c.unread.clone()).unwrap_or_default();
+        unread.extend(self.local_echo.iter().filter(|e| !e.dropped).map(|e| Unread {
+            text: e.message.text.clone(),
+            sent: (e.sent != e.message.text.trim()).then(|| e.sent.clone()),
+            files: e.message.files.clone(),
+            steer: e.message.steer,
+        }));
+        (true, unread)
+    }
+
+    /// Close what's left open by a turn that will never finish (a replayed history, or a session
+    /// that ended mid-turn): nothing runs in it any more.
+    pub fn settle(&mut self) {
+        for item in self.items.iter_mut() {
+            match item {
+                Item::Assistant { done, .. } | Item::Reasoning { done, .. } => *done = true,
+                Item::Tool(card) if card.state == ToolState::Running => {
+                    card.state = ToolState::Failed;
+                    card.error.get_or_insert_with(|| "Interrupted before it finished.".into());
+                }
+                Item::Subagent(card) if card.done.is_none() => {
+                    card.done = Some(false);
+                    card.current = None;
+                }
+                _ => {}
             }
         }
+        self.subagents_active = 0;
+        self.busy_since = None;
+        self.intent = None;
     }
 
     pub fn pending_prompts(&self) -> usize {
@@ -666,8 +756,19 @@ impl AgentView {
                 }
             }
             "user.message" => {
+                self.has_history = true;
                 let source = s(d, "source").unwrap_or_default();
                 let sent = s(d, "content").unwrap_or_default();
+                // Graysense asking the agent to finish what its closing interrupted: the work goes
+                // on under the message that started it.
+                if source == "system" && crate::memory::split_included(&sent).0.trim() == CARRY_ON_PROMPT {
+                    self.notice(Level::Info, "Graysense closed while Copilot was working. Picking up where it left off.");
+                    self.turn_started = event_ms(ev);
+                    fx.push(self.log(Level::Info, "Picking up where it left off"));
+                    self.status = Status::Thinking;
+                    self.busy_since.get_or_insert_with(Since::now);
+                    return fx;
+                }
                 if sent.trim().is_empty() || source == "memory" || source == "system" || source.starts_with("agent-") {
                     return fx;
                 }
@@ -676,8 +777,8 @@ impl AgentView {
                 self.turn_started = event_ms(ev);
                 // Steered and queued messages can reach the agent in a different order than sent.
                 if let Some(at) = self.local_echo.iter().position(|e| e.sent == sent.trim()) {
-                    if let Some(m) = self.local_echo.remove(at).and_then(|e| e.queued) {
-                        self.push(Item::User { text: m.text, files: m.files, took: None });
+                    if let Some(e) = self.local_echo.remove(at).filter(|e| e.queued) {
+                        self.push(Item::User { text: e.message.text, files: e.message.files, took: None });
                     }
                 } else {
                     // Full paths, so images can be previewed (a name for attachments without one).
@@ -686,6 +787,10 @@ impl AgentView {
                         .and_then(|a| a.as_array())
                         .map(|list| list.iter().filter_map(|a| s(a, "path").or_else(|| s(a, "displayName"))).collect())
                         .unwrap_or_default();
+                    // A reopened session is named after its first message, as it was when new.
+                    if self.title.is_none() {
+                        self.title = Some(content.clone());
+                    }
                     self.push(Item::User { text: content.clone(), files, took: None });
                 }
                 fx.push(self.log(Level::Info, format!("You: {}", trunc(&content, 70))));
@@ -958,6 +1063,12 @@ impl AgentView {
                 }
                 // Sent as the turn ended.
                 self.show_queued();
+                // Stopping a turn clears the messages that were waiting on it from the runtime.
+                if aborted {
+                    for e in self.local_echo.iter_mut() {
+                        e.dropped = true;
+                    }
+                }
                 let was_busy = self.busy_since.take();
                 self.status = Status::Idle;
                 self.intent = None;
@@ -981,6 +1092,10 @@ impl AgentView {
                 self.busy_since = None;
             }
             "session.warning" => {
+                // A step cut off by the session closing shows as failed (with why) on its own card.
+                if s(d, "warningType").as_deref() == Some("interrupted_tools") {
+                    return fx;
+                }
                 if let Some(msg) = s(d, "message") {
                     self.notice(Level::Warn, msg);
                 }
@@ -1198,5 +1313,61 @@ mod tests {
         assert_eq!(v.queued().count(), 0);
         v.apply(&ev("3", "user.message", json!({ "content": "Then run it" })));
         assert_eq!(said(&v), ["Write tidy.py", "Then run it"]);
+    }
+
+    #[test]
+    fn closing_mid_turn_keeps_the_work_and_the_messages_not_read_yet() {
+        let mut v = working();
+        v.echo_user_shown("Use tabs", "Use tabs", vec![r"C:\code\style.md".into()], true);
+        let unread = Unread { text: "Use tabs".into(), sent: None, files: vec![r"C:\code\style.md".into()], steer: true };
+        assert_eq!(v.unfinished(), (true, vec![unread]));
+        // Read, and the turn over: nothing to carry on.
+        v.apply(&ev("2", "user.message", json!({ "content": "Use tabs" })));
+        v.apply(&ev("3", "session.idle", json!({})));
+        assert_eq!(v.unfinished(), (false, Vec::new()));
+        // A session that's still starting isn't working on anything yet.
+        v.status = Status::Booting;
+        assert!(!v.unfinished().0);
+    }
+
+    #[test]
+    fn messages_the_runtime_dropped_are_never_sent_again() {
+        let mut v = working();
+        v.echo_user_shown("Then run it", "Then run it", Vec::new(), false);
+        // Stopping the turn clears what waited on it from the runtime.
+        v.apply(&ev("2", "session.idle", json!({ "aborted": true })));
+        v.echo_user_shown("Use tabs", "Use tabs", Vec::new(), false);
+        v.echo_user_shown("Add tests", "Add tests", Vec::new(), false);
+        // A send that failed never reached it either.
+        v.send_failed("Add tests");
+        let unread: Vec<String> = v.unfinished().1.into_iter().map(|m| m.text).collect();
+        assert_eq!(unread, ["Use tabs"]);
+        // One that was to start a turn leaves the agent idle rather than thinking forever.
+        v.send_failed("Use tabs");
+        assert_eq!(v.status, Status::Idle);
+    }
+
+    #[test]
+    fn a_reopened_session_keeps_its_name_and_shows_carrying_on_as_a_notice() {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.apply(&ev("1", "user.message", json!({ "content": "Write 10 jokes" })));
+        v.apply(&ev("2", "user.message", json!({ "content": CARRY_ON_PROMPT, "source": "system" })));
+        v.apply(&ev("3", "user.message", json!({ "content": "Make them shorter" })));
+        assert_eq!(v.title.as_deref(), Some("Write 10 jokes"));
+        assert_eq!(said(&v), ["Write 10 jokes", "Make them shorter"]);
+        assert!(v.items.iter().any(|i| matches!(i, Item::Notice { text, .. } if text.starts_with("Graysense closed while Copilot was working"))));
+    }
+
+    #[test]
+    fn a_step_cut_off_by_closing_stops_running() {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.apply(&ev("1", "user.message", json!({ "content": "Build it" })));
+        v.apply(&ev("2", "tool.execution_start", json!({ "toolCallId": "t", "toolName": "powershell", "arguments": { "command": "cargo build" } })));
+        v.settle();
+        let Some(Item::Tool(card)) = v.items.last() else { panic!("expected a tool card") };
+        assert!(card.state == ToolState::Failed && card.error.is_some());
+        // The runtime's note about it is for the agent; the card already says so.
+        v.apply(&ev("3", "session.warning", json!({ "warningType": "interrupted_tools", "message": "1 tool call(s) had no recorded result at resume." })));
+        assert!(!v.items.iter().any(|i| matches!(i, Item::Notice { .. })));
     }
 }

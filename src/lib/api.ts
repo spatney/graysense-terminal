@@ -62,7 +62,7 @@ export async function restartToUpdate() {
     openOverlay({
       kind: 'confirm',
       title: `Restart to install Graysense ${useUi.getState().update?.nextVersion ?? ''}?`,
-      body: `${n === 1 ? 'An agent is' : `${n} agents are`} still working. Restarting stops ${n === 1 ? 'it' : 'them'}; your sessions reopen when Graysense is back.`,
+      body: `${n === 1 ? 'An agent is' : `${n} agents are`} still working. Restarting interrupts ${n === 1 ? 'it' : 'them'}; ${n === 1 ? 'it picks' : 'they pick'} up where ${n === 1 ? 'it' : 'they'} left off when Graysense is back.`,
       confirm: 'Restart now',
       onConfirm: () => void act({ type: 'updateRestart', confirmed: true }),
     });

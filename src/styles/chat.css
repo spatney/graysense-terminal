@@ -1391,6 +1391,7 @@ button.file-chip:hover {
 
 .auto-chip {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 5px;
   height: 26px;
@@ -1401,6 +1402,7 @@ button.file-chip:hover {
   color: var(--text-faint);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .auto-chip:hover {
@@ -1416,6 +1418,13 @@ button.file-chip:hover {
 
 .auto-chip .codicon {
   font-size: 13px;
+}
+
+/* Too narrow for the label as well as the model's name: the lit shield (and its tip) says it. */
+@container chat (max-width: 640px) {
+  .auto-chip-label {
+    display: none;
+  }
 }
 
 .ring {

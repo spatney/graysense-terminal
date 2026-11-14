@@ -3,6 +3,18 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.2.4 — 2026-11-14
+
+- **Pick up where you left off**: close Graysense (or restart it to update) while an agent is
+  working, and when it opens again the agent carries on with its task. Messages it hadn't read
+  yet are sent again, and reopened sessions keep their names and their Approve all setting.
+- **Reopened sessions stay put**: closing Graysense again while a session is still reopening (or
+  after you cleared it with `/clear`) no longer swaps it for a new, empty one the next time.
+  Steps that were cut off show as interrupted instead of running forever, and the first message
+  you send to a reopened session no longer renames it.
+- **"Approving all" stays on one line**: in a narrow message box it shrinks to its lit shield
+  (hover it for what it means), leaving room for the model's name.
+
 ## 0.2.3 — 2026-11-14
 
 - **Recent folders, a hover away**: in the ⌄ menu beside +, **New agent in folder** and **New

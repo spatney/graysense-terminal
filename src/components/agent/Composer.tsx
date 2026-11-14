@@ -544,7 +544,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
               onClick={() => void act({ type: 'setAutoApprove', bay: bay!.id, on: !agent.autoApprove })}
             >
               <Icon name={agent.autoApprove ? 'shield' : 'workspace-trusted'} />
-              {agent.autoApprove ? 'Approving all' : null}
+              {agent.autoApprove && <span className="auto-chip-label">Approving all</span>}
             </button>
           )}
           <span className="grow" />

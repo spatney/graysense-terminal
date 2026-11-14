@@ -83,6 +83,9 @@ signed in (`copilot login`).
   the command palette. The agent's commands, file lookups, permissions, project instructions and
   memory follow it there. A new session that hasn't started yet starts in the folder you choose
   instead of getting its own.
+- **Pick up where you left off**: Graysense reopens the sessions and terminals you had open, with
+  each session's name and approval choice. An agent that was working when Graysense closed (or
+  restarted to update) carries on with its task, and messages it hadn't read yet are sent again.
 - **Search everything** (Ctrl+K): notes, session names and conversations, and the contents of every
   file in your sessions folder, with highlighted snippets and line numbers.
 - Each agent has a side panel with its **files** (open the folder in VS Code from there), the

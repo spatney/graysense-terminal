@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::agent::backend::{AgentSpec, Backend, Change, ClientState, Cmd, Evt, MarketInfo, MarketPlugin, McpCmd, McpServerInfo, McpToolInfo, ModelInfo, PluginCmd, PluginInfo, SessionInfo, UiTx};
-use crate::agent::{AgentView, AppTab, BayId, Effect, Item, Level, Mode, Status};
+use crate::agent::{AgentView, AppTab, BayId, CarryOn, Effect, Item, Level, Mode, Since, Status, Unread};
 use crate::canvas::CanvasInstance;
 use crate::memory::{MemoryStore, Origin, Project, Scope, Source, State as MemoryState};
 use crate::missions::{Mission, MissionBoard};
@@ -101,6 +101,15 @@ enum SavedBay {
         /// A new session that hasn't started (it gets its folder with the first message).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         fresh: bool,
+        /// The session's own approval choice (absent in workspaces saved before it was kept).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto_approve: Option<bool>,
+        /// Copilot was working (or waiting on the user) when Graysense closed: it carries on.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        working: bool,
+        /// Messages it hadn't read yet, sent again when the session is back.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unread: Vec<Unread>,
     },
     Shell {
         cwd: String,
@@ -287,6 +296,8 @@ pub struct Core {
     seq: u64,
     sent: Sent,
     last_ws: String,
+    /// Graysense is closing: the workspace was saved as it was, before its sessions shut down.
+    exiting: bool,
     last_save: Instant,
     mcp_refresh_at: Option<Instant>,
     sys: Arc<Mutex<SysStats>>,
@@ -345,6 +356,7 @@ impl Core {
             seq: 0,
             sent: Sent::default(),
             last_ws: String::new(),
+            exiting: false,
             last_save: Instant::now(),
             mcp_refresh_at: None,
             sys: sysmon::spawn(),
@@ -396,12 +408,23 @@ impl Core {
         let Some(ws) = settings::read_json::<Workspace>(&Self::workspace_path()) else { return };
         for b in ws.bays {
             match b {
-                SavedBay::Agent { cwd, session_id, incognito, fresh } => {
+                SavedBay::Agent { cwd, session_id, incognito, fresh, auto_approve, working, unread } => {
                     let cwd = PathBuf::from(cwd);
-                    if fresh {
-                        self.new_session(None, incognito);
+                    let resumes = session_id.is_some();
+                    let bay = if fresh {
+                        self.new_session(None, incognito)
                     } else if cwd.is_dir() {
-                        self.new_agent(cwd, None, session_id, None, incognito);
+                        self.new_agent(cwd, None, session_id, None, incognito)
+                    } else {
+                        continue;
+                    };
+                    if let Some(v) = self.agent_mut(bay) {
+                        if let Some(on) = auto_approve {
+                            v.auto_approve.store(on, Ordering::Relaxed);
+                        }
+                        if resumes && (working || !unread.is_empty()) {
+                            v.carry_on = Some(CarryOn { working, unread });
+                        }
                     }
                 }
                 SavedBay::Shell { cwd, shell } => {
@@ -420,13 +443,20 @@ impl Core {
             .bays
             .iter()
             .map(|b| match &b.kind {
-                // Sessions that never got a message aren't saved by the runtime; reopen those fresh.
-                BayKind::Agent(v) => SavedBay::Agent {
-                    cwd: v.cwd.display().to_string(),
-                    session_id: v.session_id.clone().filter(|_| v.items.iter().any(|i| matches!(i, Item::User { .. }))),
-                    incognito: v.incognito,
-                    fresh: v.deferred,
-                },
+                BayKind::Agent(v) => {
+                    // Sessions that never got a message aren't saved by the runtime; reopen those fresh.
+                    let session_id = v.session_id.clone().filter(|_| v.has_history);
+                    let (working, unread) = if session_id.is_some() { v.unfinished() } else { (false, Vec::new()) };
+                    SavedBay::Agent {
+                        cwd: v.cwd.display().to_string(),
+                        session_id,
+                        incognito: v.incognito,
+                        fresh: v.deferred,
+                        auto_approve: Some(v.auto_approve.load(Ordering::Relaxed)),
+                        working,
+                        unread,
+                    }
+                }
                 BayKind::Shell(s) => SavedBay::Shell { cwd: s.cwd.display().to_string(), shell: s.shell.clone() },
             })
             .collect();
@@ -435,6 +465,10 @@ impl Core {
 
     /// Persist the open bays whenever they change, so a crash never loses the layout.
     fn save_workspace_if_changed(&mut self) {
+        // Sessions shutting down as Graysense closes would read as no longer working.
+        if self.exiting {
+            return;
+        }
         let ws = self.workspace();
         let sig = serde_json::to_string(&ws).unwrap_or_default();
         if sig != self.last_ws {
@@ -507,8 +541,10 @@ impl Core {
         }
         if let Some(meta) = resume.as_deref().and_then(|r| self.session_index.get(r)) {
             view.name = meta.name.clone();
+            view.title = meta.auto_name.clone();
         }
         if resume.is_some() {
+            view.has_history = true;
             view.notice(Level::Info, "Resuming session…");
             // Resumed history was already read when it happened.
             view.learn_cursor = usize::MAX;
@@ -710,6 +746,8 @@ impl Core {
         }
         v.items.retain(|i| !matches!(i, Item::Notice { text, .. } if text == "Resuming session…"));
         v.session_id = None;
+        v.has_history = false;
+        v.carry_on = None;
         v.context_tier = tier;
         v.learn_cursor = 0;
         v.notice(Level::Info, "That session is no longer available, so this is a new one.");
@@ -717,6 +755,25 @@ impl Core {
         let spec = self.agent_spec(v, None, Vec::new(), None);
         self.backend.send(Cmd::Create { bay, spec });
         true
+    }
+
+    /// Pick up work that Graysense closing interrupted: Copilot is asked to finish what it was
+    /// doing, then the messages it hadn't read are sent again (the runtime doesn't keep those).
+    fn carry_on(&mut self, bay: BayId, carry: CarryOn) {
+        if carry.working {
+            let Some(v) = self.agent_mut(bay) else { return };
+            v.status = Status::Thinking;
+            v.busy_since = Some(Since::now());
+            self.backend.send(Cmd::CarryOn { bay });
+        }
+        for m in carry.unread {
+            let files: Vec<PathBuf> = m.files.iter().map(PathBuf::from).filter(|p| p.exists()).collect();
+            let sent = m.sent.unwrap_or_else(|| m.text.clone());
+            let Some(v) = self.agent_mut(bay) else { return };
+            v.granted.lock().extend(files.iter().cloned());
+            v.echo_user_shown(&m.text, &sent, m.files, m.steer);
+            self.backend.send(Cmd::Send { bay, text: sent, files, steer: m.steer });
+        }
     }
 
     pub fn new_shell(&mut self, cwd: PathBuf, shell: Option<String>) -> BayId {
@@ -925,7 +982,8 @@ impl Core {
     }
 
     /// Install the downloaded update and reopen Graysense with the same bays. Returns how many
-    /// agents are working when it needs the user to confirm first (restarting stops them).
+    /// agents are working when it needs the user to confirm first (restarting interrupts them;
+    /// they carry on when Graysense is back).
     pub fn restart_to_update(&mut self, confirmed: bool) -> Result<usize, String> {
         let working = self.bays.iter().filter(|b| matches!(&b.kind, BayKind::Agent(v) if v.status.is_busy())).count();
         if working > 0 && !confirmed {
@@ -1022,6 +1080,7 @@ impl Core {
             Evt::SessionClosed { bay } => {
                 if let Some(v) = self.agent_mut(bay) {
                     v.show_queued();
+                    v.settle();
                     v.status = Status::Offline;
                 }
             }
@@ -1067,23 +1126,39 @@ impl Core {
                 self.apply_effects(bay, effects);
             }
             Evt::History { bay, events } => {
-                if let Some(v) = self.agent_mut(bay) {
-                    v.items.retain(|i| !matches!(i, Item::Notice { text, .. } if text == "Resuming session…"));
-                    for ev in &events {
-                        let _ = v.apply(ev);
-                    }
-                    // Learning picks up from here: the history was read when it happened.
-                    if v.learn_cursor == usize::MAX {
-                        v.learn_cursor = v.items.len();
-                    }
-                    // A replayed turn's end (session.idle) isn't kept in the history.
+                let Some(v) = self.agent_mut(bay) else { return };
+                // A message sent before the history came back may have started a turn that's still going.
+                let live = v.status.clone();
+                v.items.retain(|i| !matches!(i, Item::Notice { text, .. } if text == "Resuming session…"));
+                for ev in &events {
+                    let _ = v.apply(ev);
+                }
+                // Learning picks up from here: the history was read when it happened.
+                if v.learn_cursor == usize::MAX {
+                    v.learn_cursor = v.items.len();
+                }
+                if matches!(live, Status::Booting | Status::Idle) {
+                    // A replayed turn's end (session.idle) isn't kept in the history, and nothing
+                    // runs in a session that was just resumed.
+                    v.settle();
                     v.status = Status::Idle;
-                    v.busy_since = None;
+                } else {
+                    v.status = live;
+                }
+                if let Some(carry) = v.carry_on.take() {
+                    self.carry_on(bay, carry);
                 }
             }
             Evt::Notice { bay, error, text } => {
                 if let Some(v) = self.agent_mut(bay) {
                     v.notice(if error { Level::Error } else { Level::Info }, text);
+                }
+            }
+            Evt::SendFailed { bay, text, error } => {
+                if let Some(v) = self.agent_mut(bay) {
+                    v.send_failed(&text);
+                    let what = if text == crate::agent::CARRY_ON_PROMPT { "Couldn't pick up where it left off" } else { "Send failed" };
+                    v.notice(Level::Error, format!("{what}: {error}"));
                 }
             }
             Evt::Toast { error, text } => self.toast(if error { Level::Error } else { Level::Ok }, text),
@@ -1310,6 +1385,7 @@ impl Core {
     /// Graysense is closing: save everything, queue unread conversations, stop the runtime.
     pub fn on_exit(&mut self) {
         self.save_workspace_if_changed();
+        self.exiting = true;
         self.missions.save_if_dirty();
         self.queue_unread_conversations();
         self.memory.lock().save_if_dirty();
@@ -1715,5 +1791,13 @@ mod tests {
         assert_eq!(tier_for(&models, Some("haiku"), want("long_context")), None);
         assert_eq!(tier_for(&models, Some("new-model"), want("long_context")), None);
         assert_eq!(tier_for(&models, Some("opus"), None), None);
+    }
+
+    #[test]
+    fn workspaces_saved_by_earlier_versions_still_reopen() {
+        // A field missing from an older file mustn't fail the parse (that would reopen nothing).
+        let ws: Workspace = serde_json::from_str(r#"{ "bays": [{ "kind": "Agent", "cwd": "C:\\code", "session_id": "s1" }], "focused": 0 }"#).unwrap();
+        let Some(SavedBay::Agent { session_id, auto_approve, working, unread, .. }) = ws.bays.first() else { panic!("expected an agent") };
+        assert_eq!((session_id.as_deref(), *auto_approve, *working, unread.len()), (Some("s1"), None, false, 0));
     }
 }

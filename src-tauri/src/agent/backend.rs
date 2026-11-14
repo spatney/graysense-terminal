@@ -103,6 +103,8 @@ pub enum Cmd {
     Create { bay: BayId, spec: AgentSpec },
     /// `steer`: if the agent is mid-turn, it reads the message at its next step instead of after the turn.
     Send { bay: BayId, text: String, files: Vec<PathBuf>, steer: bool },
+    /// Ask an agent whose work Graysense closing interrupted to pick up where it left off.
+    CarryOn { bay: BayId },
     Abort { bay: BayId },
     SetModel { bay: BayId, model: String, effort: Change, tier: Change },
     SetMode { bay: BayId, mode: Mode },
@@ -277,6 +279,8 @@ pub enum Evt {
     Event { bay: BayId, ev: Box<SessionEvent> },
     History { bay: BayId, events: Vec<SessionEvent> },
     Notice { bay: BayId, error: bool, text: String },
+    /// A message (`text`, as sent) didn't reach the agent.
+    SendFailed { bay: BayId, text: String, error: String },
     Toast { error: bool, text: String },
     Permission { bay: BayId, prompt: PermissionPrompt },
     Elicit { bay: BayId, prompt: Box<ElicitPrompt> },
@@ -359,7 +363,7 @@ fn needs_client(cmd: &Cmd) -> bool {
 
 fn bay_of(cmd: &Cmd) -> Option<BayId> {
     match cmd {
-        Cmd::Send { bay, .. } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::SetCwd { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
+        Cmd::Send { bay, .. } | Cmd::CarryOn { bay } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::SetCwd { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
         Cmd::App(AppCmd::CallTool { bay, .. }) | Cmd::App(AppCmd::ReadResource { bay, .. }) => Some(*bay),
         Cmd::Mcp(McpCmd::Tools { bay, .. }) | Cmd::Mcp(McpCmd::Restart { bay, .. }) | Cmd::Mcp(McpCmd::Stop { bay, .. }) | Cmd::Mcp(McpCmd::Start { bay, .. }) => Some(*bay),
         _ => None,
@@ -374,6 +378,8 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
     let mut starting: HashSet<BayId> = HashSet::new();
     let mut parked: HashMap<BayId, Vec<Cmd>> = HashMap::new();
     let mut backlog: VecDeque<Cmd> = VecDeque::new();
+    // Each agent's latest send: the next waits for it, so messages sent together arrive in order.
+    let mut sends: HashMap<BayId, tokio::task::JoinHandle<()>> = HashMap::new();
 
     loop {
         let cmd = match backlog.pop_front() {
@@ -454,9 +460,15 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     let s = session.clone();
                     let ui = ui.clone();
                     tokio::spawn(async move {
-                        if let Ok(events) = s.get_events().await {
-                            ui.send(Evt::History { bay, events });
-                        }
+                        // Even without the history, the bay stops "resuming" (and carries on).
+                        let events = match s.get_events().await {
+                            Ok(events) => events,
+                            Err(e) => {
+                                ui.send(Evt::Notice { bay, error: true, text: format!("Couldn't load the earlier conversation: {e}") });
+                                Vec::new()
+                            }
+                        };
+                        ui.send(Evt::History { bay, events });
                     });
                 }
                 if mode != Mode::Interactive && !resumed {
@@ -476,8 +488,12 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
             Cmd::Send { bay, text, files, steer } => {
                 let s = sessions[&bay].clone();
                 let ui = ui.clone();
-                tokio::spawn(async move {
-                    let mut opts = github_copilot_sdk::MessageOptions::new(text);
+                let before = sends.remove(&bay);
+                let send = tokio::spawn(async move {
+                    if let Some(before) = before {
+                        let _ = before.await;
+                    }
+                    let mut opts = github_copilot_sdk::MessageOptions::new(text.clone());
                     if steer {
                         // An idle session runs it as usual.
                         opts = opts.with_mode(github_copilot_sdk::DeliveryMode::Immediate);
@@ -497,9 +513,26 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                         opts = opts.with_attachments(attachments);
                     }
                     if let Err(e) = s.send(opts).await {
-                        ui.send(Evt::Notice { bay, error: true, text: format!("Send failed: {e}") });
+                        ui.send(Evt::SendFailed { bay, text, error: e.to_string() });
                     }
                 });
+                sends.insert(bay, send);
+            }
+            Cmd::CarryOn { bay } => {
+                let s = sessions[&bay].clone();
+                let ui = ui.clone();
+                let before = sends.remove(&bay);
+                let send = tokio::spawn(async move {
+                    if let Some(before) = before {
+                        let _ = before.await;
+                    }
+                    // The app's message, not the user's (the transcript shows it as a notice).
+                    let opts = github_copilot_sdk::MessageOptions::new(super::CARRY_ON_PROMPT).with_source(github_copilot_sdk::MessageSource::System);
+                    if let Err(e) = s.send(opts).await {
+                        ui.send(Evt::SendFailed { bay, text: super::CARRY_ON_PROMPT.to_owned(), error: e.to_string() });
+                    }
+                });
+                sends.insert(bay, send);
             }
             Cmd::Abort { bay } => {
                 let s = sessions[&bay].clone();
@@ -563,6 +596,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
             }
             Cmd::Close { bay } => {
                 memories.remove(&bay);
+                sends.remove(&bay);
                 if let Some(s) = sessions.remove(&bay) {
                     tokio::spawn(async move {
                         let _ = s.disconnect().await;
