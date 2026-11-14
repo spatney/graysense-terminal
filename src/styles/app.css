@@ -233,6 +233,8 @@
   align-items: center;
   gap: 1px;
   margin-left: auto;
+  /* Shown on hover, so it mustn't make the row taller: its buttons center on the line instead. */
+  height: 0;
 }
 
 .list-row:hover .row-actions,

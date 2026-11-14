@@ -3,6 +3,12 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.2.5 — 2026-11-14
+
+- **Rows stay put on hover**: pointing at an installed plugin no longer makes its row taller (and
+  everything below it jump) as its Update and Uninstall buttons appear. No list with buttons that
+  appear on hover changes height any more.
+
 ## 0.2.4 — 2026-11-14
 
 - **Pick up where you left off**: close Graysense (or restart it to update) while an agent is
