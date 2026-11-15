@@ -82,6 +82,9 @@ jobs:
               Write-Output "::error::v$version is already released. Bump the version and add a CHANGELOG.md section."
               exit 1
             }
+            # Usually there's no release yet, and gh says so with exit code 1: Actions ends a pwsh
+            # step with the last exit code, so that mustn't fail the plan.
+            $global:LASTEXITCODE = 0
           }
           # -SkipBuild: the build has a step of its own below.
           $flags = @('-SkipBuild')
