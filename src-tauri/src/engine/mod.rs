@@ -8,6 +8,7 @@ mod fork;
 mod learn;
 mod rewind;
 mod syncer;
+mod tidy;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -278,6 +279,8 @@ pub struct Core {
     learn_jobs: HashMap<BayId, LearnJob>,
     /// GitHub sync: the repository, what the last sync did, and the one in progress.
     sync: syncer::Syncer,
+    /// Merging memories that say the same thing.
+    tidy: tidy::Tidy,
     session_index: SessionIndex,
     sessions: Vec<SessionInfo>,
     sessions_loaded: bool,
@@ -344,6 +347,7 @@ impl Core {
             memory_last_run: None,
             learn_jobs: HashMap::new(),
             sync: syncer::Syncer::new(),
+            tidy: tidy::Tidy::new(),
             session_index: SessionIndex::load(),
             sessions: Vec::new(),
             sessions_loaded: false,
@@ -1324,6 +1328,7 @@ impl Core {
             }
             Evt::Learned { bay, result } => self.finish_learning(bay, result),
             Evt::Reconciled { job, result } => self.sync_reconciled(job, result),
+            Evt::Tidied { job, result } => self.tidied(job, result),
             Evt::RewindPreview { bay, event_id, result } => self.rewind_previewed(bay, event_id, result),
             Evt::Rewound { bay, event_id, result } => self.rewound(bay, event_id, result),
             Evt::Forked { job, result } => self.forked(job, result),
@@ -1423,6 +1428,7 @@ impl Core {
         }
         self.memory_tick();
         self.sync_tick();
+        self.tidy_tick();
         if self.last_save.elapsed() > Duration::from_secs(3) {
             self.save();
             self.last_save = Instant::now();
@@ -1540,7 +1546,7 @@ impl Core {
     fn memory_dto(&self) -> MemoryStateDto {
         let now = crate::memory::now();
         let store = self.memory.lock();
-        MemoryStateDto { memories: store.memories.iter().map(|m| memory_dto(m, now)).collect(), last_run: self.memory_last_run.clone(), learning: self.learn_jobs.len() }
+        MemoryStateDto { memories: store.memories.iter().map(|m| memory_dto(m, now)).collect(), last_run: self.memory_last_run.clone(), learning: self.learn_jobs.len(), tidying: self.tidy.running(), last_tidy: store.last_tidy }
     }
 
     fn mcp_dto(&self) -> McpDto {

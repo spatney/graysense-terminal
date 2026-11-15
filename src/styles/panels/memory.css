@@ -83,8 +83,17 @@
 }
 
 .mem-set-row.mem-disabled .mem-set-text,
-.mem-set-field.mem-disabled {
+.mem-set-field.mem-disabled,
+.mem-set-tidy.mem-disabled {
   opacity: 0.55;
+}
+
+.mem-set-tidy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 0 0 12px;
 }
 
 .mem-set-row .toggle {

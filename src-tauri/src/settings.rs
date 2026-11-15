@@ -104,11 +104,13 @@ pub struct MemorySettings {
     pub review_all: bool,
     /// Model for the background curator (`None` = the cheapest available).
     pub model: Option<String>,
+    /// Merge memories that say the same thing, about once a week.
+    pub tidy: bool,
 }
 
 impl Default for MemorySettings {
     fn default() -> Self {
-        Self { enabled: true, learn: true, inject: true, review_all: false, model: None }
+        Self { enabled: true, learn: true, inject: true, review_all: false, model: None, tidy: true }
     }
 }
 
@@ -223,6 +225,7 @@ impl Settings {
         add("memory.share", json!(self.memory.inject), json!("boolean"), "Share relevant memories with agents.");
         add("memory.review_all", json!(self.memory.review_all), json!("boolean"), "Ask the user before saving anything learned.");
         add("memory.learning_model", json!(self.memory.model), model_choice, "Model the memory curator uses (null = lowest cost).");
+        add("memory.tidy", json!(self.memory.tidy), json!("boolean"), "Merge memories that say the same thing, about once a week (while learning is on).");
         Value::Object(out)
     }
 
@@ -325,6 +328,7 @@ impl Settings {
                 "memory.share" => next.memory.inject = flag()?,
                 "memory.review_all" => next.memory.review_all = flag()?,
                 "memory.learning_model" => next.memory.model = model()?,
+                "memory.tidy" => next.memory.tidy = flag()?,
                 other => return Err(format!("Unknown setting “{other}”. Call graysense_settings with action \"get\" to list them.")),
             }
             done.push(format!("{key} → {}", if v.is_null() { "default".to_owned() } else { v.to_string().trim_matches('"').to_owned() }));
@@ -359,6 +363,7 @@ pub const SYNCED_KEYS: &[&str] = &[
     "memory.share",
     "memory.review_all",
     "memory.learning_model",
+    "memory.tidy",
 ];
 
 const PANELS: [&str; 7] = ["missions", "sessions", "memory", "mcp", "plugins", "settings", "hidden"];

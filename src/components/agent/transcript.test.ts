@@ -229,6 +229,8 @@ describe('what an agent was given from memory', () => {
         memories: [memory(1, 'The API listens on port 8080'), memory(2, 'Tests need Docker', { pinned: true }), memory(3, 'Uses yarn', { state: 'archived', archivedReason: 'Marked wrong' })],
         lastRun: null,
         learning: 0,
+        tidying: false,
+        lastTidy: null,
       },
     });
   });

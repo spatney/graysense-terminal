@@ -105,6 +105,8 @@ pub enum Action {
     MemoryClearAll,
     MemoryExport { path: String, markdown: bool },
     MemoryImport { path: String },
+    /// Merge memories that say the same thing, now.
+    MemoryTidy,
     // GitHub sync
     /// Connect to a repository (`owner/name` or its address), or with `create` make a new private one.
     SyncConnect { repo: String, create: bool },
@@ -587,6 +589,7 @@ impl Core {
                 self.toast(Level::Ok, format!("Imported {n} memor{} for review", if n == 1 { "y" } else { "ies" }));
                 Ok(json!(n))
             }
+            Action::MemoryTidy => self.tidy_start(true).map(|_| Value::Null),
             Action::SyncConnect { repo, create } => {
                 if repo.trim().is_empty() {
                     return Err("Enter the repository's name.".into());

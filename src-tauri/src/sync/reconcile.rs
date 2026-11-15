@@ -11,12 +11,11 @@ use serde_json::{Value, json};
 
 use crate::memory::{self, Memory, MemoryId, Op, Scope};
 
-/// Instructions for the reconcile session (which has no tools).
-pub const RECONCILE_PROMPT: &str = "You are merging two copies of a developer's saved memory for Graysense, a workbench where people work with AI coding agents. \
-One copy comes from this PC and the other from the developer's other PC, through their GitHub sync repository. Each line is one memory: \
-[id] kind · which PC · date · who wrote it · text.
-
-Find memories that should become one:
+/// What to do with memories that should become one: the same whether they came from two PCs
+/// (a sync) or piled up on one (tidying).
+macro_rules! merge_rules {
+    () => {
+        "Find memories that should become one:
 - \"duplicate\": they say the same thing in different words.
 - \"supersedes\": a newer memory replaces, narrows or corrects an older one about the same thing (the developer changed their mind, a command or version changed).
 - \"contradiction\": they can't both be true, and the newer or more specific one is right.
@@ -29,7 +28,29 @@ Rules:
 - Never merge memories that only share a topic or a word. If you are unsure, leave them alone: doing nothing is normal and often right.
 - A memory is in at most one set. Never invent facts or add anything that isn't in the memories.
 - Confidence 0.9 or more only when you are certain they say the same thing or one clearly replaces the other; below 0.8 will be ignored.
-Respond only with JSON matching the schema.";
+Respond only with JSON matching the schema."
+    };
+}
+
+/// Instructions for the reconcile session (which has no tools).
+pub const RECONCILE_PROMPT: &str = concat!(
+    "You are merging two copies of a developer's saved memory for Graysense, a workbench where people work with AI coding agents. \
+One copy comes from this PC and the other from the developer's other PC, through their GitHub sync repository. Each line is one memory: \
+[id] kind · which PC · date · who wrote it · text.
+
+",
+    merge_rules!()
+);
+
+/// Instructions for tidying one PC's memory (a session with no tools).
+pub const TIDY_PROMPT: &str = concat!(
+    "You are tidying a developer's saved memory for Graysense, a workbench where people work with AI coding agents. \
+Memories are learned from conversations over weeks, so the same thing gets saved twice in different words, and newer memories replace older ones. \
+Each line is one memory: [id] kind · date · who wrote it · text.
+
+",
+    merge_rules!()
+);
 
 /// Structured-output schema: closed objects with every field required, like the curator's.
 pub fn schema() -> Value {
@@ -81,6 +102,22 @@ pub const MAX_CHUNKS: usize = 6;
 /// merge), likeliest matches next to each other, and no request without something from each PC.
 /// Returns the requests, and the memories that had to wait for a later sync.
 pub fn chunks(entries: &[(&Memory, Side)], device: &str, scope_label: &dyn Fn(&Scope) -> String) -> (Vec<Chunk>, Vec<MemoryId>) {
+    let both = |part: &[(&Memory, Side)]| part.iter().any(|(_, s)| *s == Side::Here) && part.iter().any(|(_, s)| *s == Side::Elsewhere);
+    split(entries, scope_label, &both, &|part, scope| message(part, device, scope))
+}
+
+/// [`chunks`] for tidying one PC's memory: no request without something new or changed since
+/// `since` (Unix seconds; 0 asks about everything), since the rest was looked at last time.
+pub fn tidy_chunks(entries: &[&Memory], since: i64, scope_label: &dyn Fn(&Scope) -> String) -> (Vec<Chunk>, Vec<MemoryId>) {
+    let entries: Vec<(&Memory, Side)> = entries.iter().map(|m| (*m, Side::Here)).collect();
+    let changed = |part: &[(&Memory, Side)]| part.iter().any(|(m, _)| m.updated > since);
+    split(&entries, scope_label, &changed, &|part, scope| tidy_message(part, scope))
+}
+
+/// Group by scope (in the order scopes first appear), order each group likeliest matches
+/// first, and cut it into requests that `ask` wants, at most [`MAX_CHUNKS`] of them.
+#[allow(clippy::type_complexity)]
+fn split(entries: &[(&Memory, Side)], scope_label: &dyn Fn(&Scope) -> String, ask: &dyn Fn(&[(&Memory, Side)]) -> bool, message: &dyn Fn(&[(&Memory, Side)], &str) -> String) -> (Vec<Chunk>, Vec<MemoryId>) {
     let mut by_scope: Vec<(&Scope, Vec<(&Memory, Side)>)> = Vec::new();
     for (m, side) in entries {
         match by_scope.iter_mut().find(|(s, _)| **s == m.scope) {
@@ -93,15 +130,14 @@ pub fn chunks(entries: &[(&Memory, Side)], device: &str, scope_label: &dyn Fn(&S
     for (scope, group) in by_scope {
         let ordered = similar_together(group);
         for part in ordered.chunks(CHUNK) {
-            let both = part.iter().any(|(_, s)| *s == Side::Here) && part.iter().any(|(_, s)| *s == Side::Elsewhere);
-            if part.len() < 2 || !both {
+            if part.len() < 2 || !ask(part) {
                 continue;
             }
             if out.len() >= MAX_CHUNKS {
                 waiting.extend(part.iter().map(|(m, _)| m.id));
                 continue;
             }
-            out.push(Chunk { ids: part.iter().map(|(m, _)| m.id).collect(), message: message(part, device, &scope_label(scope)) });
+            out.push(Chunk { ids: part.iter().map(|(m, _)| m.id).collect(), message: message(part, &scope_label(scope)) });
         }
     }
     (out, waiting)
@@ -134,17 +170,31 @@ fn similar_together(mut items: Vec<(&Memory, Side)>) -> Vec<(&Memory, Side)> {
 fn message(part: &[(&Memory, Side)], device: &str, scope: &str) -> String {
     let mut s = format!("These memories are about {scope}. \"this PC\" is {device}; \"other PC\" came through the sync repository.\n\n");
     for (m, side) in part {
-        let date = chrono::DateTime::from_timestamp(m.updated, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
-        let who = match (m.is_user_owned(), m.pinned) {
-            (true, true) => "written by the developer, pinned",
-            (true, false) => "written by the developer",
-            (false, true) => "learned, pinned",
-            (false, false) => "learned",
-        };
         let pc = if *side == Side::Here { "this PC" } else { "other PC" };
-        s.push_str(&format!("[{}] {} · {pc} · {date} · {who} · {}\n", m.id, m.kind.name(), m.text));
+        s.push_str(&format!("[{}] {} · {pc} · {} · {} · {}\n", m.id, m.kind.name(), date(m), who(m), m.text));
     }
     s
+}
+
+fn tidy_message(part: &[(&Memory, Side)], scope: &str) -> String {
+    let mut s = format!("These memories are about {scope}.\n\n");
+    for (m, _) in part {
+        s.push_str(&format!("[{}] {} · {} · {} · {}\n", m.id, m.kind.name(), date(m), who(m), m.text));
+    }
+    s
+}
+
+fn date(m: &Memory) -> String {
+    chrono::DateTime::from_timestamp(m.updated, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default()
+}
+
+fn who(m: &Memory) -> &'static str {
+    match (m.is_user_owned(), m.pinned) {
+        (true, true) => "written by the developer, pinned",
+        (true, false) => "written by the developer",
+        (false, true) => "learned, pinned",
+        (false, false) => "learned",
+    }
 }
 
 /// The operations in the model's answer. Only groups that hold together are kept: the ids exist

@@ -996,6 +996,10 @@ pub struct MemoryStateDto {
     pub last_run: Option<(i64, Option<String>)>,
     /// Conversations being read right now.
     pub learning: usize,
+    /// Memories that say the same thing are being merged right now.
+    pub tidying: bool,
+    /// When memory was last tidied on this PC (Unix seconds).
+    pub last_tidy: Option<i64>,
 }
 
 /// GitHub sync: where it's connected, what the last sync did, and what it waits on.

@@ -48,7 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(act).mockResolvedValue(undefined);
   vi.mocked(setSide).mockResolvedValue(undefined);
-  useUi.setState({ memory: { memories: [], lastRun: null, learning: 0 } });
+  useUi.setState({ memory: { memories: [], lastRun: null, learning: 0, tidying: false, lastTidy: null } });
 });
 afterEach(cleanup);
 
@@ -180,7 +180,7 @@ describe('questions', () => {
     });
 
     it('is shown in the status line of Memory too', () => {
-      useUi.setState({ sync: removals(0, 37), memory: { memories: [], lastRun: null, learning: 0 } });
+      useUi.setState({ sync: removals(0, 37), memory: { memories: [], lastRun: null, learning: 0, tidying: false, lastTidy: null } });
       render(<SyncPointer />);
       expect(screen.getByText('GitHub sync is waiting for you')).toBeTruthy();
       expect(screen.getByText('Most of what was synced would be removed')).toBeTruthy();
@@ -247,7 +247,7 @@ describe('connected', () => {
   });
 
   it('summarises the last sync without the zeros, opens what is waiting for review, and lists what it noted', () => {
-    useUi.setState({ memory: { memories: [{ ...proposed(9), kind: 'note' }, proposed(12)], lastRun: null, learning: 0 } });
+    useUi.setState({ memory: { memories: [{ ...proposed(9), kind: 'note' }, proposed(12)], lastRun: null, learning: 0, tidying: false, lastTidy: null } });
     show({ ...connected, report: { at: ago(300), pulled: 3, removed: 1, pushed: 2, combined: 0, conflicts: 0, tidied: 2, review: 1, notes: ['2 files over 25 MB stayed on this PC.'] } });
     expect(screen.getByText('Brought in 3 · removed 1 · saved 2 files to GitHub · AI merged 2 ·')).toBeTruthy();
     expect(screen.queryByText(/combined/)).toBeNull();

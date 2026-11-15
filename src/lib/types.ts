@@ -385,6 +385,10 @@ export interface MemoryStateDto {
   memories: MemoryDto[];
   lastRun: [number, string | null] | null;
   learning: number;
+  /** Memories that say the same thing are being merged right now. */
+  tidying: boolean;
+  /** When memory was last tidied on this PC (Unix seconds). */
+  lastTidy: number | null;
 }
 
 export interface SyncCounts {
@@ -608,6 +612,7 @@ export interface Settings {
   'memory.share': boolean;
   'memory.review_all': boolean;
   'memory.learning_model': string | null;
+  'memory.tidy': boolean;
   recent_dirs: string[];
 }
 
@@ -746,6 +751,8 @@ export type Action =
   | { type: 'memoryClearAll' }
   | { type: 'memoryExport'; path: string; markdown: boolean }
   | { type: 'memoryImport'; path: string }
+  /** Merge memories that say the same thing, now. */
+  | { type: 'memoryTidy' }
   /** Connect to a repository (`owner/name` or its github.com address), or with `create` make a new private one named `repo`. */
   | { type: 'syncConnect'; repo: string; create: boolean }
   /** Answer what sync is waiting on (`SyncDto.pending`). */

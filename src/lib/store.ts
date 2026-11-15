@@ -73,7 +73,7 @@ interface UiState {
 
 const empty = {
   sessions: { loaded: false, items: [] } as SessionsDto,
-  memory: { memories: [], lastRun: null, learning: 0 } as MemoryStateDto,
+  memory: { memories: [], lastRun: null, learning: 0, tidying: false, lastTidy: null } as MemoryStateDto,
 };
 
 export const useUi = create<UiState>(() => ({

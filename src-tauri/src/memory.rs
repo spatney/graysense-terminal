@@ -370,6 +370,8 @@ struct Disk {
     memories: Vec<Memory>,
     #[serde(default)]
     approvals: Vec<ApprovalStat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_tidy: Option<i64>,
 }
 
 pub struct MemoryStore {
@@ -380,6 +382,8 @@ pub struct MemoryStore {
     pub dirty: bool,
     /// Bumped on every change so views can refresh caches.
     pub revision: u64,
+    /// When memory was last tidied on this PC (Unix seconds).
+    pub last_tidy: Option<i64>,
 }
 
 pub fn now() -> i64 {
@@ -733,7 +737,7 @@ impl MemoryStore {
     pub fn load_from(path: PathBuf) -> Self {
         let disk: Disk = read_json_backed(&path).unwrap_or_default();
         let next_id = disk.next_id.max(disk.memories.iter().map(|m| m.id).max().unwrap_or(0) + 1);
-        let mut s = MemoryStore { memories: disk.memories, approvals: disk.approvals, next_id, path, dirty: false, revision: 0 };
+        let mut s = MemoryStore { memories: disk.memories, approvals: disk.approvals, next_id, path, dirty: false, revision: 0, last_tidy: disk.last_tidy };
         s.compact();
         s
     }
@@ -743,7 +747,7 @@ impl MemoryStore {
         if !self.dirty {
             return;
         }
-        let disk = Disk { version: 1, next_id: self.next_id, memories: self.memories.clone(), approvals: self.approvals.clone() };
+        let disk = Disk { version: 1, next_id: self.next_id, memories: self.memories.clone(), approvals: self.approvals.clone(), last_tidy: self.last_tidy };
         if write_json_backed(&self.path, &disk).is_ok() {
             self.dirty = false;
         }
@@ -752,6 +756,12 @@ impl MemoryStore {
     /// Changes not on the disk yet.
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Memory was tidied at `at` (Unix seconds). Saved with the memories, but not a change to them.
+    pub fn mark_tidied(&mut self, at: i64) {
+        self.last_tidy = Some(at);
+        self.dirty = true;
     }
 
     pub(crate) fn touch(&mut self) {
@@ -1782,7 +1792,7 @@ mod tests {
     use super::*;
 
     fn store() -> MemoryStore {
-        MemoryStore { memories: Vec::new(), approvals: Vec::new(), next_id: 1, path: std::env::temp_dir().join("gs-mem-test.json"), dirty: false, revision: 0 }
+        MemoryStore { memories: Vec::new(), approvals: Vec::new(), next_id: 1, path: std::env::temp_dir().join("gs-mem-test.json"), dirty: false, revision: 0, last_tidy: None }
     }
 
     #[test]

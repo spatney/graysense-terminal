@@ -147,6 +147,8 @@ pub enum Cmd {
     Fork { job: ForkJob },
     /// Ask a model to compare memories from two PCs (sync's merge). `job` names the request.
     Reconcile { job: u64, model: Option<String>, message: String },
+    /// Ask a model which of this PC's memories say the same thing (tidying). `job` names the request.
+    Tidy { job: u64, model: Option<String>, message: String },
     Mcp(McpCmd),
     Plugin(PluginCmd),
     App(AppCmd),
@@ -338,6 +340,8 @@ pub enum Evt {
     Learned { bay: BayId, result: Result<String, String> },
     /// The model finished comparing memories for a sync (raw JSON text, or an error).
     Reconciled { job: u64, result: Result<String, String> },
+    /// The model finished comparing memories for tidying (raw JSON text, or an error).
+    Tidied { job: u64, result: Result<String, String> },
     /// What rewinding the conversation to `event_id` would do to files.
     RewindPreview { bay: BayId, event_id: String, result: Result<super::RewindPreview, String> },
     /// The runtime rewound the conversation to `event_id` (or didn't: see the report).
@@ -746,6 +750,17 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                         tracing::warn!("sync reconcile failed: {e}");
                     }
                     ui.send(Evt::Reconciled { job, result });
+                });
+            }
+            Cmd::Tidy { job, model, message } => {
+                let c = client.clone().unwrap();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    let result = one_shot(&c, model, crate::sync::reconcile::TIDY_PROMPT, crate::sync::reconcile::schema(), message).await;
+                    if let Err(e) = &result {
+                        tracing::warn!("memory tidy failed: {e}");
+                    }
+                    ui.send(Evt::Tidied { job, result });
                 });
             }
             Cmd::RewindPreview { bay, event_id } => {

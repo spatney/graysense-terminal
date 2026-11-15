@@ -427,6 +427,11 @@ impl Core {
         Ok(())
     }
 
+    /// A sync is in progress (it may be changing memory).
+    pub(super) fn sync_running(&self) -> bool {
+        self.sync.run.is_some()
+    }
+
     /// Worker results, and an AI step that's taking too long.
     pub(super) fn sync_tick(&mut self) {
         // Git installed while Graysense is open is noticed (the card asks for it until it's there).
@@ -859,7 +864,7 @@ impl Core {
 
     /// Notice changes made here, and sync by itself when it's time.
     fn sync_schedule(&mut self) {
-        if !self.sync.config.connected() || self.sync.run.is_some() || self.sync.pending.is_some() || self.exiting {
+        if !self.sync.config.connected() || self.sync.run.is_some() || self.sync.pending.is_some() || self.exiting || self.tidy.running() {
             return;
         }
         let now = Instant::now();

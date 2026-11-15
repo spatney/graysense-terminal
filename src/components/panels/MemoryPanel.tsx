@@ -283,6 +283,10 @@ function confirmClearAll() {
   });
 }
 
+function tidyNow() {
+  void act({ type: 'memoryTidy' });
+}
+
 function cardMenu(m: MemoryDto, expanded: boolean, selection: string, run: (a: CardAction) => void): MenuItem[] {
   const items: MenuItem[] = [
     { label: expanded ? 'Hide details' : 'Show details', icon: expanded ? 'chevron-up' : 'chevron-down', hint: 'Enter', onSelect: () => run('toggle') },
@@ -796,6 +800,14 @@ function StatusLine({ mem, learnOn, now, onTurnOn }: { mem: MemoryStateDto; lear
       </div>
     );
   }
+  if (mem.tidying) {
+    return (
+      <div className="mem-status" role="status">
+        <Icon name="wand" className="mem-status-live" />
+        <span className="shimmer ellipsis">Tidying up: merging memories that say the same thing…</span>
+      </div>
+    );
+  }
   if (!learnOn) {
     return (
       <div className="mem-status">
@@ -901,6 +913,9 @@ function EmptyState({
 function SettingsCard({ settings, models, onImported, onClose }: { settings: Settings | null; models: ModelDto[] | undefined; onImported: (n: number) => void; onClose: () => void }) {
   const id = useId();
   const synced = useUi((s) => s.sync?.repo != null);
+  const tidying = useUi((s) => s.memory.tidying);
+  const lastTidy = useUi((s) => s.memory.lastTidy);
+  const now = useNow(true);
   const off = !settings || !settings['memory.enabled'];
   const model = settings?.['memory.learning_model'] ?? null;
   const list = models ?? [];
@@ -933,6 +948,20 @@ function SettingsCard({ settings, models, onImported, onClose }: { settings: Set
         disabled={off}
         onChange={(v) => void saveSettings({ 'memory.review_all': v })}
       />
+      <SettingRow
+        title="Tidy up every week"
+        desc="Merges memories that say the same thing. Anything you wrote or pinned waits for your OK."
+        on={settings?.['memory.tidy'] ?? true}
+        disabled={off}
+        onChange={(v) => void saveSettings({ 'memory.tidy': v })}
+      />
+      <div className={`mem-set-tidy${off ? ' mem-disabled' : ''}`}>
+        <button type="button" className="btn sm" disabled={off || tidying} data-tip="Merge memories that say the same thing, now" onClick={tidyNow}>
+          {tidying ? <span className="spinner sm" /> : <Icon name="wand" />}
+          {tidying ? 'Tidying…' : 'Tidy up now'}
+        </button>
+        {lastTidy != null && !tidying && <span className="mem-set-desc">Last tidied {agoLong(lastTidy, now)}</span>}
+      </div>
       <div className={`mem-set-field${off ? ' mem-disabled' : ''}`}>
         <label className="mem-set-title" htmlFor={`${id}-model`}>
           Learning model
