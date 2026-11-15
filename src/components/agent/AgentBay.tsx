@@ -33,6 +33,7 @@ function BayHead({ bay }: { bay: BayDto }) {
       { label: 'Rename', icon: 'edit', onSelect: () => setRenaming(bay.title) },
       { label: 'Save a note about this session', icon: 'bookmark', hint: 'Ctrl+Shift+S', onSelect: () => captureNote({ session: agent.sessionId, title: bay.title }) },
       { label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', disabled: agent.incognito, onSelect: () => void act({ type: 'learnNow', bay: bay.id }) },
+      { label: 'Fork into a new session', icon: 'repo-forked', disabled: !agent.sessionId || agent.deferred || agent.status.busy, onSelect: () => void act({ type: 'fork', bay: bay.id }) },
       { label: agent.autoApprove ? 'Ask before running tools' : 'Approve all tool calls', icon: 'shield', onSelect: () => void act({ type: 'setAutoApprove', bay: bay.id, on: !agent.autoApprove }) },
       { label: 'Clear transcript', icon: 'clear-all', onSelect: () => void act({ type: 'clearTranscript', bay: bay.id }) },
       { sep: true },

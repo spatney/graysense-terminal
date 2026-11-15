@@ -56,6 +56,9 @@ pub enum Action {
     /// `text`: the changed message, when editing.
     RewindConfirm { bay: BayId, restore_files: bool, #[serde(default)] text: Option<String> },
     RewindCancel { bay: BayId },
+    /// Copy the session into a new one: up to the message at `index` (put in the copy's message
+    /// box), or all of it.
+    Fork { bay: BayId, #[serde(default)] index: Option<usize> },
     Reply { bay: BayId, index: usize, reply: Reply },
     ForgetMemories { bay: BayId, index: usize },
     CloseCanvas { bay: BayId, instance: String },
@@ -325,6 +328,7 @@ impl Core {
                 self.rewind_cancel(bay);
                 ok
             }
+            Action::Fork { bay, index } => self.fork(bay, index).map(|_| Value::Null),
             Action::Reply { bay, index, reply } => self.reply(bay, index, reply).map(|_| Value::Null),
             Action::ForgetMemories { bay, index } => {
                 let ids = match self.agent_mut(bay).and_then(|v| v.items.get_mut(index)) {

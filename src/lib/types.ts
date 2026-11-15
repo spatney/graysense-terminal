@@ -694,6 +694,7 @@ export type Action =
   | { type: 'rewindStart'; bay: BayId; index: number; then: 'undo' | 'edit' | 'retry'; model?: string | null }
   | { type: 'rewindConfirm'; bay: BayId; restoreFiles: boolean; text?: string | null }
   | { type: 'rewindCancel'; bay: BayId }
+  | { type: 'fork'; bay: BayId; index?: number }
   | { type: 'reply'; bay: BayId; index: number; reply: Reply }
   | { type: 'forgetMemories'; bay: BayId; index: number }
   | { type: 'closeCanvas'; bay: BayId; instance: string }

@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod dto;
+mod fork;
 mod learn;
 mod rewind;
 mod syncer;
@@ -540,6 +541,11 @@ impl Core {
     }
 
     pub fn new_agent(&mut self, cwd: PathBuf, prompt: Option<String>, resume: Option<String>, mission: Option<u64>, incognito: bool) -> BayId {
+        self.open_agent(cwd, prompt, resume, mission, incognito, |_| {})
+    }
+
+    /// [`Core::new_agent`], with `setup` choosing more for the session before it starts.
+    fn open_agent(&mut self, cwd: PathBuf, prompt: Option<String>, resume: Option<String>, mission: Option<u64>, incognito: bool, setup: impl FnOnce(&mut AgentView)) -> BayId {
         let id = self.alloc_bay();
         let mut view = AgentView::new(id, cwd.clone(), Mode::Interactive);
         view.auto_approve.store(resume.is_none() && self.settings.default_auto_approve, Ordering::Relaxed);
@@ -565,6 +571,7 @@ impl Core {
             view.echo_user(p);
             capture_explicit_memory(&self.memory, self.settings.memory.enabled, &mut view, p);
         }
+        setup(&mut view);
         let first = prompt.as_deref().map(sessions::short_title);
         let spec = self.agent_spec(&view, prompt, Vec::new(), resume);
         self.backend.send(Cmd::Create { bay: id, spec });
@@ -1292,6 +1299,7 @@ impl Core {
             Evt::Reconciled { job, result } => self.sync_reconciled(job, result),
             Evt::RewindPreview { bay, event_id, result } => self.rewind_previewed(bay, event_id, result),
             Evt::Rewound { bay, event_id, result } => self.rewound(bay, event_id, result),
+            Evt::Forked { job, result } => self.forked(job, result),
             Evt::McpChanged => self.refresh_mcp(),
         }
     }

@@ -610,6 +610,11 @@ const UserTurnView = memo(function UserTurnView({
             <Icon name="discard" />
           </button>
         )}
+        {sessionId && it.eventId && (
+          <button type="button" className="icon-btn sm" data-tip="Fork a new session from here" onClick={() => void act({ type: 'fork', bay: bayId, index: i })}>
+            <Icon name="repo-forked" />
+          </button>
+        )}
         <button type="button" className="icon-btn sm" data-tip="Save to notes" onClick={() => captureNote({ text: it.text, session: sessionId, title: sessionTitle })}>
           <Icon name="bookmark" />
         </button>

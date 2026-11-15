@@ -21,7 +21,7 @@ use github_copilot_sdk::rpc::{
     McpRestartServerRequest, McpStartServerRequest, McpStopServerRequest, MetadataSetWorkingDirectoryRequest, ModeSetRequest, ModelSwitchToRequest,
     PermissionDecision, PluginsDisableRequest, PluginsEnableRequest, PluginsInstallRequest,
     PluginsMarketplacesAddRequest, PluginsMarketplacesBrowseRequest, PluginsMarketplacesRemoveRequest,
-    PluginsUninstallRequest, PluginsUpdateRequest,
+    PluginsUninstallRequest, PluginsUpdateRequest, SessionsForkRequest,
 };
 use github_copilot_sdk::session::Session;
 use github_copilot_sdk::session_events::{ContextTier, SessionMode};
@@ -51,6 +51,21 @@ impl UiTx {
     pub fn send(&self, e: Evt) {
         let _ = self.tx.send(e);
     }
+}
+
+/// Copying a session into a new one.
+#[derive(Clone, Debug, Default)]
+pub struct ForkJob {
+    /// The bay it was asked from.
+    pub bay: BayId,
+    pub session_id: String,
+    /// Copy only what came before this `user.message` event (None: the whole session).
+    pub before_event: Option<String>,
+    /// The new session's name.
+    pub name: String,
+    /// The message it was forked before (and its attached files), for the new session's message box.
+    pub text: Option<String>,
+    pub files: Vec<String>,
 }
 
 pub struct AgentSpec {
@@ -128,6 +143,8 @@ pub enum Cmd {
     /// Rewind the conversation to a `user.message` event (dropping it and everything after it),
     /// putting the files the dropped turns changed back as they were too when `restore_files`.
     Rewind { bay: BayId, event_id: String, restore_files: bool },
+    /// Copy a session into a new one (up to, not including, `to_event_id` when given).
+    Fork { job: ForkJob },
     /// Ask a model to compare memories from two PCs (sync's merge). `job` names the request.
     Reconcile { job: u64, model: Option<String>, message: String },
     Mcp(McpCmd),
@@ -325,6 +342,8 @@ pub enum Evt {
     RewindPreview { bay: BayId, event_id: String, result: Result<super::RewindPreview, String> },
     /// The runtime rewound the conversation to `event_id` (or didn't: see the report).
     Rewound { bay: BayId, event_id: String, result: Result<super::RewindReport, String> },
+    /// A session was copied into a new one (its id), or couldn't be.
+    Forked { job: ForkJob, result: Result<String, String> },
     /// MCP servers were added, removed or switched on or off: the core refreshes their status.
     McpChanged,
 }
@@ -753,6 +772,15 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     ui.send(Evt::Rewound { bay, event_id, result });
                 });
                 sends.insert(bay, rewind);
+            }
+            Cmd::Fork { job } => {
+                let c = client.clone().unwrap();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    let req = SessionsForkRequest { session_id: SessionId::from(job.session_id.clone()), to_event_id: job.before_event.clone(), name: Some(job.name.clone()) };
+                    let result = c.rpc().sessions().fork(req).await.map(|r| r.session_id.to_string()).map_err(|e| e.to_string());
+                    ui.send(Evt::Forked { job, result });
+                });
             }
             Cmd::Mcp(m) => mcp(client.clone().unwrap(), &sessions, m, ui.clone(), self_tx.clone()),
             Cmd::Plugin(p) => plugins(client.clone().unwrap(), p, ui.clone(), self_tx.clone()),

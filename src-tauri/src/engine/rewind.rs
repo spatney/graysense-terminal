@@ -172,7 +172,7 @@ impl Core {
     }
 
     /// Put a message back in the message box, with its files attached again.
-    fn give_back(&mut self, bay: BayId, text: String, files: &[String]) {
+    pub(super) fn give_back(&mut self, bay: BayId, text: String, files: &[String]) {
         let Some(v) = self.agent_mut(bay) else { return };
         for p in existing(files) {
             if !v.attachments.contains(&p) {

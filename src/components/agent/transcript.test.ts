@@ -180,6 +180,13 @@ describe('rewinding', () => {
     expect(useUi.getState().drafts[1]).toBe('second');
   });
 
+  it('forks from any message the runtime has, even while the agent works', () => {
+    render(createElement(Transcript, { bay: settled(false), items: [...items, { type: 'user', text: 'third', files: [] }], visible: true }));
+    expect(tips('Fork a new session from here')).toHaveLength(2);
+    fireEvent.click(tips('Fork a new session from here')[1]);
+    expect(act).toHaveBeenCalledWith({ type: 'fork', bay: 1, index: 2 });
+  });
+
   it('puts an undone message above what is being written', () => {
     useUi.setState({ drafts: { 1: 'half a thought', 2: 'redo this' } });
     applyUpdate({ seq: 1, full: false, fills: [{ bay: 1, text: 'redo this' }, { bay: 2, text: 'redo this' }, { bay: 3, text: 'new' }] });
