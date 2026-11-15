@@ -27,6 +27,8 @@ export function useShortcuts() {
       const focused = s.bays[focusedIndex];
       let handled = true;
       if (ctrl && !e.shiftKey && !e.altKey && k === 'k' && !inTerminal) openOverlay({ kind: 'search' });
+      else if (ctrl && !e.shiftKey && !e.altKey && k === 'f' && !inTerminal && focused?.kind === 'agent' && s.transcripts[focused.id]?.length && !target?.closest?.('.side'))
+        window.dispatchEvent(new CustomEvent('gs-chat-find', { detail: focused.id }));
       else if (ctrl && e.shiftKey && k === 'p') openOverlay({ kind: 'palette' });
       else if (ctrl && !e.shiftKey && (k === '/' || e.code === 'Slash')) openOverlay({ kind: 'shortcuts' });
       else if (ctrl && !e.shiftKey && k === ',') void setSide('settings');

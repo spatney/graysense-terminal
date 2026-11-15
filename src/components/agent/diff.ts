@@ -403,6 +403,28 @@ export function shownPath(path: string, root: string | null | undefined): ShownP
   return { dir: rel && parts.length ? parts.join(sep) + sep : '', base, full };
 }
 
+/** Lines a diff shows before "Show all". */
+export const DIFF_PREVIEW = 60;
+
+/** The text a diff shows (its files' paths and lines, up to the preview), to find in. */
+export function diffText(diff: string, root: string | null | undefined): string {
+  const files = parseUnifiedDiff(diff);
+  if (!files.length) return diff;
+  let budget = DIFF_PREVIEW;
+  const out: string[] = [];
+  for (const f of files) {
+    const p = shownPath(f.path, root);
+    out.push(p.dir + p.base);
+    for (const h of f.hunks) {
+      if (budget <= 0) break;
+      const lines = h.lines.slice(0, budget);
+      budget -= lines.length;
+      for (const l of lines) out.push(l.text);
+    }
+  }
+  return out.join('\n');
+}
+
 // ------------------------------------------------------------------ a turn's files
 
 export type FileChangeStatus = 'created' | 'edited' | 'deleted';

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { act, captureNote, revealMemory } from '../../lib/api';
 import { agoLong, baseName, duration, plural } from '../../lib/format';
 import { langOf } from '../../lib/highlight';
@@ -11,6 +11,7 @@ import { Icon, copyText, showMenu } from '../ui';
 import { filesChanged, missingFrom } from './diff';
 import { DiffView, Stats } from './DiffView';
 import { FilesChanged } from './FilesChanged';
+import { findHits, matcher, paint, rangesIn, reveal, stepRow } from './find';
 import { PromptCard, isPrompt } from './Prompts';
 
 // ------------------------------------------------------------------ grouping
@@ -40,7 +41,10 @@ interface UserTurn {
   item: UserItem;
 }
 
-type Block = AgentTurn | UserTurn;
+export type Block = AgentTurn | UserTurn;
+
+/** The step a find is on: its work log opens, and so does the step when the match is inside it. */
+const FindReveal = createContext<{ i: number; detail: boolean } | null>(null);
 
 /** Fold a transcript into turns: your message, then the agent's steps, prompts and answer. */
 export function group(items: ItemDto[], busy: boolean, showReasoning: boolean): Block[] {
@@ -238,23 +242,28 @@ function ToolDetail({ tool, cwd }: { tool: ToolDto; cwd: string | null }) {
   if (tool.progress && tool.state === 'running') blocks.push(<div key="prog" className="faint">{tool.progress}</div>);
   if (tool.error) blocks.push(<div key="err" className="step-error selectable">{tool.error}</div>);
   if (chips.length) blocks.push(<FileChips key="files" files={chips} />);
-  if (!blocks.length) blocks.push(<div key="none" className="faint">No details.</div>);
+  if (!blocks.length) blocks.push(<div key="none" className="faint no-find">No details.</div>);
   return <div className="step-detail">{blocks}</div>;
 }
 
 function Step({ part, now, cwd }: { part: Part; now: number; cwd: string | null }) {
-  const [open, setOpen] = useState(false);
+  const [userOpen, setOpen] = useState(false);
+  const found = useContext(FindReveal);
+  const revealed = found?.i === part.i && found.detail;
+  useEffect(() => {
+    if (revealed) setOpen(true);
+  }, [revealed]);
+  const open = userOpen || revealed;
   const it = part.item;
   if (part.t === 'note' && it.type === 'assistant') {
     return (
-      <div className="worklog-note">
+      <div className="worklog-note" data-find={part.i}>
         <Markdown text={it.text} />
       </div>
     );
   }
+  const { label, target } = stepRow(it);
   let icon = 'circle-small';
-  let label = '';
-  let target: string | null = null;
   let meta: string | null = null;
   let metaTip: string | undefined;
   let stats: React.ReactNode = null;
@@ -264,8 +273,6 @@ function Step({ part, now, cwd }: { part: Part; now: number; cwd: string | null 
   switch (it.type) {
     case 'tool':
       icon = FAMILY_ICON[it.family];
-      label = it.label;
-      target = it.target;
       state = it.state;
       meta = it.state === 'running' ? duration(now - it.started) : it.state === 'failed' ? 'failed' : it.elapsed != null && it.elapsed >= 1 ? duration(it.elapsed * 1000) : null;
       if (it.diff) stats = <Stats added={it.diff.added} removed={it.diff.removed} />;
@@ -273,8 +280,6 @@ function Step({ part, now, cwd }: { part: Part; now: number; cwd: string | null 
       break;
     case 'reasoning':
       icon = 'lightbulb';
-      label = it.done ? 'Thought it through' : 'Thinking';
-      target = it.text.split('\n').find((l) => l.trim())?.replace(/^[#*\s]+/, '').slice(0, 120) ?? null;
       state = it.done ? 'ok' : 'running';
       detail = (
         <div className="step-detail">
@@ -284,33 +289,27 @@ function Step({ part, now, cwd }: { part: Part; now: number; cwd: string | null 
       break;
     case 'subagent':
       icon = 'hubot';
-      label = it.name;
-      target = it.description || null;
       state = it.done == null ? 'running' : it.done ? 'ok' : 'failed';
       meta = plural(it.tools, 'step');
       if (it.done == null && it.current) sub = <div className="step-sub mono ellipsis">{it.current}</div>;
       break;
     case 'permission':
       icon = 'shield';
-      label = it.summary;
       meta = it.outcome;
       state = it.outcome === 'denied' ? 'failed' : 'ok';
       break;
     case 'ask':
       icon = 'question';
-      label = it.question.split('\n')[0];
       meta = it.outcome;
       metaTip = it.outcome ?? undefined;
       break;
     case 'elicit':
       icon = 'edit';
-      label = it.message.split('\n')[0];
       meta = it.outcome;
       metaTip = it.outcome ?? undefined;
       break;
     case 'plan':
       icon = 'checklist';
-      label = 'Plan';
       meta = it.outcome;
       detail = (
         <div className="step-detail">
@@ -320,12 +319,11 @@ function Step({ part, now, cwd }: { part: Part; now: number; cwd: string | null 
       break;
     case 'switch':
       icon = 'arrow-swap';
-      label = 'Model fallback';
       meta = it.outcome;
       break;
   }
   return (
-    <div className={`step ${state} ${open ? 'open' : ''}`}>
+    <div className={`step ${state} ${open ? 'open' : ''}`} data-find={part.i}>
       <button type="button" className="step-row" onClick={() => detail && setOpen(!open)} aria-expanded={detail ? open : undefined}>
         <span className="step-ico">{state === 'running' ? <span className="spinner sm" /> : <Icon name={state === 'failed' ? 'error' : icon} />}</span>
         <span className="step-label">{label}</span>
@@ -356,8 +354,15 @@ function WorkLog({ turn, agent, now, cwd }: { turn: AgentTurn; agent: AgentDto |
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const [all, setAll] = useState(false);
   const steps = turn.parts.filter((p) => p.t === 'step' || p.t === 'note');
+  const found = useContext(FindReveal);
+  const revealed = found != null && steps.some((p) => p.i === found.i);
+  useEffect(() => {
+    if (!revealed) return;
+    setUserOpen(true);
+    setAll(true);
+  }, [revealed]);
   if (!steps.length && !turn.live) return null;
-  const open = userOpen ?? turn.live;
+  const open = revealed || (userOpen ?? turn.live);
   const tools = steps.map((p) => p.item).filter((it): it is ToolDto => it.type === 'tool');
   const startedAt = tools.length ? Math.min(...tools.map((t) => t.started)) : null;
   const endedAt = tools.length ? Math.max(...tools.map((t) => t.started + (t.elapsed ?? 0) * 1000)) : null;
@@ -374,7 +379,7 @@ function WorkLog({ turn, agent, now, cwd }: { turn: AgentTurn; agent: AgentDto |
         : 'Worked';
   const n = steps.filter((p) => p.t === 'step').length;
   const LIMIT = 8;
-  const shown = open && !all && turn.live && steps.length > LIMIT ? steps.slice(-LIMIT) : steps;
+  const shown = open && !all && !revealed && turn.live && steps.length > LIMIT ? steps.slice(-LIMIT) : steps;
   return (
     <div className={`worklog ${turn.live ? 'live' : ''} ${open ? 'open' : ''}`}>
       <button type="button" className="worklog-head" onClick={() => setUserOpen(!open)} aria-expanded={open}>
@@ -490,7 +495,7 @@ function RecallList({ item }: { item: RecallItem }) {
 function MemoryChip({ bay, i, item }: { bay: number; i: number; item: MemoryItem | RecallItem }) {
   if (item.type === 'recall') return <RecallChip item={item} />;
   return (
-    <span className={`memory-chip ${item.undone ? 'undone' : ''}`}>
+    <span className={`memory-chip ${item.undone ? 'undone' : ''}`} data-find={i}>
       <Icon name={item.learned ? 'sparkle' : 'lightbulb-sparkle'} />
       <span className="ellipsis">
         <b>{item.learned ? 'Learned' : 'Remembered'}</b> {item.text}
@@ -509,10 +514,10 @@ function MemoryChip({ bay, i, item }: { bay: number; i: number; item: MemoryItem
   );
 }
 
-function Notice({ item, count = 1 }: { item: NoticeItem; count?: number }) {
+function Notice({ item, count = 1, find }: { item: NoticeItem; count?: number; find?: number }) {
   const icon = { info: 'info', ok: 'pass', warn: 'warning', error: 'error' }[item.level];
   return (
-    <div className={`notice ${item.level} selectable`}>
+    <div className={`notice ${item.level} selectable`} data-find={find}>
       <Icon name={icon} />
       <span>{item.text}</span>
       {count > 1 && <span className="notice-count">×{count}</span>}
@@ -567,16 +572,18 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
     <div className="turn">
       <WorkLog turn={turn} agent={agent} now={now} cwd={cwd} />
       {prompts.map((p) => (
-        <PromptCard key={p.i} bay={bayId} index={p.i} item={p.item} cwd={cwd} />
+        <div key={p.i} className="find-wrap" data-find={p.i}>
+          <PromptCard bay={bayId} index={p.i} item={p.item} cwd={cwd} />
+        </div>
       ))}
       {answer && (
-        <div className="answer">
+        <div className="answer" data-find={answer.i}>
           <Markdown text={answer.item.text} />
           {streaming && <span className="stream-caret" />}
         </div>
       )}
       {notices.map((p) => (
-        <Notice key={p.i} item={p.item as NoticeItem} count={p.n} />
+        <Notice key={p.i} item={p.item as NoticeItem} count={p.n} find={p.i} />
       ))}
       {changed.length > 0 && <FilesChanged files={changed} cwd={cwd} />}
       {memories.map((p) => (
@@ -610,7 +617,7 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
   );
 }, sameTurn);
 
-function UserMessage({ text, files, queued }: { text: string; files: string[]; queued?: boolean }) {
+function UserMessage({ text, files, queued, find }: { text: string; files: string[]; queued?: boolean; find?: number }) {
   const images = files.filter(isImagePath);
   const others = files.filter((f) => !isImagePath(f));
   const chip = (f: string) => (
@@ -627,7 +634,9 @@ function UserMessage({ text, files, queued }: { text: string; files: string[]; q
           ))}
         </div>
       )}
-      <div className={`user-bubble ${queued ? 'queued' : ''}`}>{text}</div>
+      <div className={`user-bubble ${queued ? 'queued' : ''}`} data-find={find}>
+        {text}
+      </div>
       {others.length > 0 && <div className="user-files">{others.map(chip)}</div>}
     </div>
   );
@@ -651,7 +660,7 @@ const UserTurnView = memo(function UserTurnView({
   const rewindable = canRewind && !!it.eventId;
   return (
     <div className="turn turn--user">
-      <UserMessage text={it.text} files={it.files} />
+      <UserMessage text={it.text} files={it.files} find={i} />
       <div className="msg-actions">
         <button type="button" className="icon-btn sm" data-tip="Copy" onClick={() => void copyText(it.text)}>
           <Icon name="copy" />
@@ -775,6 +784,86 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
   const saved = useRef(0);
   const [away, setAway] = useState(false);
 
+  // Find: every match in the conversation; the one it's on (from the latest, at first) is shown.
+  const [find, setFind] = useState<string | null>(null);
+  const [cur, setCur] = useState(-1);
+  const [nudge, setNudge] = useState(0);
+  const findBox = useRef<HTMLInputElement>(null);
+  const shownAt = useRef('');
+  const cwd = bay.cwd || null;
+  const hits = useMemo(() => (find ? findHits(blocks, find, cwd) : []), [blocks, find, cwd]);
+  const at = hits.length ? (cur < 0 ? hits.length - 1 : Math.min(cur, hits.length - 1)) : -1;
+  const hit = at >= 0 ? hits[at] : null;
+  const hitI = hit?.i;
+  const inDetail = hit?.part === 'detail';
+  const revealed = useMemo(() => (hitI == null ? null : { i: hitI, detail: inDetail }), [hitI, inDetail]);
+  const need = hit ? blocks.length - hit.block : 0;
+  const lim = Math.max(limit, need);
+
+  useEffect(() => {
+    if (cur < 0 && hits.length) setCur(hits.length - 1);
+  }, [cur, hits.length]);
+
+  useEffect(() => {
+    if (need > limit) setLimit(need);
+  }, [need, limit]);
+
+  useEffect(() => {
+    const open = (e: Event) => {
+      if ((e as CustomEvent).detail !== bay.id) return;
+      setFind((f) => f ?? '');
+      requestAnimationFrame(() => {
+        findBox.current?.focus();
+        findBox.current?.select();
+      });
+    };
+    window.addEventListener('gs-chat-find', open);
+    return () => window.removeEventListener('gs-chat-find', open);
+  }, [bay.id]);
+
+  useEffect(() => {
+    const re = find == null ? null : matcher(find);
+    const el = feed.current;
+    const sc = scroller.current;
+    if (!re || !el || !sc || !visible) {
+      paint(bay.id, null);
+      if (!re) shownAt.current = '';
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const all = Array.from(el.querySelectorAll('[data-find]')).flatMap((n) => rangesIn(n, re));
+      let now: Range | null = null;
+      if (hit) {
+        const host = el.querySelector(`[data-find="${hit.i}"]`);
+        const scope = host && hit.part !== 'text' ? host.querySelector(hit.part === 'row' ? '.step-row' : '.step-detail') : host;
+        const mine = scope ? rangesIn(scope, re) : [];
+        now = mine[Math.min(hit.n, mine.length - 1)] ?? null;
+        const key = `${find}\n${hit.i}\n${hit.part}\n${hit.n}`;
+        if (host && shownAt.current !== key) {
+          shownAt.current = key;
+          stick.current = false;
+          reveal(now ?? host, sc);
+        }
+      }
+      paint(bay.id, all, now);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [find, hits, hit, lim, visible, nudge, bay.id]);
+
+  useEffect(() => () => paint(bay.id, null), [bay.id]);
+
+  const go = (step: number) => {
+    if (!hits.length) return;
+    setCur((at + step + hits.length) % hits.length);
+    shownAt.current = '';
+    setNudge((n) => n + 1);
+  };
+  const closeFind = () => {
+    setFind(null);
+    setCur(-1);
+    focusComposer(bay.id);
+  };
+
   const toBottom = () => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -822,7 +911,7 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
     setAway(!atBottom);
   };
 
-  const shown = blocks.length > limit ? blocks.slice(blocks.length - limit) : blocks;
+  const shown = blocks.length > lim ? blocks.slice(blocks.length - lim) : blocks;
   const title = bay.title;
   // The last answer can be retried: the message before it is rewound to and sent again.
   const lastBlock = blocks[blocks.length - 1];
@@ -830,29 +919,70 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
   const retryAt = agent.canRewind && lastBlock?.kind === 'agent' && !lastBlock.live && asked?.kind === 'user' && asked.item.eventId ? asked.i : null;
   return (
     <>
+      {find != null && (
+        <div className="term-find chat-find" role="search">
+          <input
+            ref={findBox}
+            className="input"
+            autoFocus
+            spellCheck={false}
+            placeholder="Find in conversation"
+            aria-label="Find in conversation"
+            value={find}
+            onChange={(e) => {
+              setFind(e.target.value);
+              setCur(-1);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                go(e.shiftKey ? -1 : 1);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                closeFind();
+              }
+            }}
+          />
+          <span className="find-count" aria-live="polite">
+            {!find.trim() ? '' : hits.length ? `${at + 1} of ${hits.length}` : 'No results'}
+          </span>
+          <button type="button" className="icon-btn sm" data-tip="Previous" data-keys="Shift+Enter" aria-label="Previous match" disabled={!hits.length} onClick={() => go(-1)}>
+            <Icon name="arrow-up" />
+          </button>
+          <button type="button" className="icon-btn sm" data-tip="Next" data-keys="Enter" aria-label="Next match" disabled={!hits.length} onClick={() => go(1)}>
+            <Icon name="arrow-down" />
+          </button>
+          <button type="button" className="icon-btn sm" data-tip="Close" data-keys="Esc" aria-label="Close find" onClick={closeFind}>
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
         <div className="chat-feed" ref={feed}>
           {shown.length < blocks.length && (
-            <button type="button" className="btn ghost sm chat-earlier" onClick={() => setLimit((l) => l + PAGE)}>
+            <button type="button" className="btn ghost sm chat-earlier" onClick={() => setLimit(lim + PAGE)}>
               Show earlier messages
             </button>
           )}
-          {shown.map((b) =>
-            b.kind === 'user' ? (
-              <UserTurnView key={b.key} bayId={bay.id} i={b.i} it={b.item} canRewind={agent.canRewind} sessionId={agent.sessionId} sessionTitle={title} />
-            ) : (
-              <AgentTurnView
-                key={b.key}
-                bayId={bay.id}
-                turn={b}
-                agent={b.live ? agent : null}
-                sessionId={agent.sessionId}
-                sessionTitle={title}
-                cwd={bay.cwd || null}
-                retry={b === lastBlock ? retryAt : null}
-              />
-            ),
-          )}
+          <FindReveal.Provider value={revealed}>
+            {shown.map((b) =>
+              b.kind === 'user' ? (
+                <UserTurnView key={b.key} bayId={bay.id} i={b.i} it={b.item} canRewind={agent.canRewind} sessionId={agent.sessionId} sessionTitle={title} />
+              ) : (
+                <AgentTurnView
+                  key={b.key}
+                  bayId={bay.id}
+                  turn={b}
+                  agent={b.live ? agent : null}
+                  sessionId={agent.sessionId}
+                  sessionTitle={title}
+                  cwd={cwd}
+                  retry={b === lastBlock ? retryAt : null}
+                />
+              ),
+            )}
+          </FindReveal.Provider>
           {agent.queued.map((m, i) => (
             <QueuedTurnView key={`queued-${i}`} m={m} />
           ))}

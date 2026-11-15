@@ -17,6 +17,7 @@ function BayHead({ bay }: { bay: BayDto }) {
   const agent = bay.agent!;
   const [renaming, setRenaming] = useState<string | null>(null);
   const dockOpen = useUi((s) => s.dock[bay.id]?.open ?? false);
+  const hasItems = useUi((s) => (s.transcripts[bay.id]?.length ?? 0) > 0);
   const missions = useUi((s) => s.missions);
   const notLearning = useUi((s) => !agent.incognito && (s.settings?.['memory.enabled'] ?? true) && !learnsIn(s.settings, agent.projectKey));
   const mission = agent.mission != null ? missions.find((m) => m.id === agent.mission) : null;
@@ -90,6 +91,11 @@ function BayHead({ bay }: { bay: BayDto }) {
         </button>
       )}
       <div className="bay-head-actions">
+        {hasItems && (
+          <button type="button" className="icon-btn sm" data-tip="Find in conversation" data-keys="Ctrl+F" aria-label="Find in conversation" onClick={() => window.dispatchEvent(new CustomEvent('gs-chat-find', { detail: bay.id }))}>
+            <Icon name="search" />
+          </button>
+        )}
         <button type="button" className={`icon-btn sm ${dockOpen ? 'active' : ''}`} data-tip={dockOpen ? 'Hide side panel' : 'Files, changes and canvases'} onClick={() => setDock(bay.id, { open: !dockOpen })}>
           <Icon name="layout-sidebar-right" />
           {extras > 0 && !dockOpen && <span className="count" style={{ position: 'absolute', transform: 'translate(9px, -8px)', minWidth: 14, height: 14, fontSize: 9 }}>{extras}</span>}

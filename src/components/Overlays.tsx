@@ -323,6 +323,9 @@ function useCommands(): Command[] {
       const agent = focused.agent;
       cmds.push(
         { id: 'cd', label: agent.deferred ? 'Start this session in a folder…' : 'Change folder…', icon: 'arrow-swap', group: 'Bay', run: () => void changeFolder(focused.id) },
+        ...(s.transcripts[focused.id]?.length
+          ? [{ id: 'find', label: 'Find in conversation', icon: 'search', group: 'Bay', keys: ['Ctrl', 'F'], run: () => setTimeout(() => window.dispatchEvent(new CustomEvent('gs-chat-find', { detail: focused.id }))) }]
+          : []),
         { id: 'learn', label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', group: 'Bay', run: () => void act({ type: 'learnNow', bay: focused.id }) },
         { id: 'clear', label: 'Clear transcript', icon: 'clear-all', group: 'Bay', run: () => void act({ type: 'clearTranscript', bay: focused.id }) },
       );
@@ -458,6 +461,7 @@ const SHEET: [string, [string[], string][]][] = [
       [['↑'], 'Previous message'],
       [['/'], 'Commands'],
       [['Shift', 'Tab'], 'Next mode (Ask, Plan, Autopilot)'],
+      [['Ctrl', 'F'], 'Find in the conversation'],
     ],
   ],
   [

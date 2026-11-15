@@ -2,10 +2,7 @@ import { memo, useMemo, useState } from 'react';
 import { act } from '../../lib/api';
 import { highlightLines, langOf } from '../../lib/highlight';
 import { Icon, copyText } from '../ui';
-import { parseUnifiedDiff, shownPath, type DiffFile, type DiffHunk } from './diff';
-
-/** Lines shown before "Show all" when a diff is long. */
-const PREVIEW = 60;
+import { DIFF_PREVIEW as PREVIEW, parseUnifiedDiff, shownPath, type DiffFile, type DiffHunk } from './diff';
 
 const STATUS: Record<DiffFile['status'], string | null> = { added: 'New file', deleted: 'Deleted', renamed: 'Renamed', modified: null };
 

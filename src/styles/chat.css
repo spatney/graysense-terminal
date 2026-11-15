@@ -2818,6 +2818,28 @@ button.file-chip:hover {
   min-height: 26px;
 }
 
+.chat-find .find-count {
+  min-width: 64px;
+  padding: 0 4px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.find-wrap {
+  display: contents;
+}
+
+::highlight(gs-find) {
+  background-color: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+
+::highlight(gs-find-now) {
+  background-color: color-mix(in srgb, var(--warn) 58%, transparent);
+}
+
 .xterm .xterm-viewport {
   background: transparent !important;
 }

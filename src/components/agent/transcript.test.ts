@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from '../../lib/api';
 import { applyUpdate, useUi } from '../../lib/store';
 import type { AgentDto, BayDto, ItemDto, MemoryDto, ToolDto } from '../../lib/types';
+import { findHits, matcher, rangesIn } from './find';
 import { Transcript, group } from './Transcript';
 
 vi.mock('../../lib/api', async (original) => ({ ...(await original<typeof import('../../lib/api')>()), act: vi.fn() }));
@@ -303,5 +304,110 @@ describe('where a resumed session left off', () => {
     cleanup();
     render(createElement(Transcript, { bay: resumed(handoff, true), items, visible: true }));
     expect(screen.queryByText('Where you left off')).toBeNull();
+  });
+});
+
+describe('finding in a conversation', () => {
+  const items: ItemDto[] = [
+    { type: 'user', text: 'Why does the build fail?', files: [] },
+    { type: 'assistant', text: 'Let me run the build.', done: true },
+    { ...tool('Run the build'), args: { command: 'npm run build' }, output: 'build failed: missing import' },
+    { type: 'assistant', text: 'The [build](https://example.com/build) failed on an import.', done: true },
+  ];
+  const bay: BayDto = {
+    id: 5, kind: 'agent', title: 'Build', cwd: 'C:\\repo', folder: 'repo', shell: null,
+    agent: {
+      sessionId: 'find', model: null, effort: null, contextTier: null, mode: 'interactive',
+      status: { kind: 'idle', label: 'Ready', detail: null, busy: false, attention: false },
+      intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
+      context: null, toolCount: 1, turns: 1, changedFiles: [], busySince: null, mission: null,
+      canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null, resumable: true, premiumCost: null,
+    },
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    // jsdom lays nothing out, so a match has no box to scroll to.
+    if (!('getBoundingClientRect' in Range.prototype)) Object.defineProperty(Range.prototype, 'getBoundingClientRect', { value: () => new DOMRect(), configurable: true });
+    useUi.setState({ drafts: {}, focusTick: {} });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('finds every match top to bottom: the message, the work log (each step’s row, then what it opens to) and the answer', () => {
+    expect(findHits(group(items, false, true), 'BUILD')).toEqual([
+      { block: 0, i: 0, part: 'text', n: 0 },
+      { block: 1, i: 1, part: 'text', n: 0 },
+      { block: 1, i: 2, part: 'row', n: 0 },
+      { block: 1, i: 2, part: 'detail', n: 0 },
+      { block: 1, i: 2, part: 'detail', n: 1 },
+      // Not the link's address.
+      { block: 1, i: 3, part: 'text', n: 0 },
+    ]);
+    expect(findHits(group(items, false, true), '  ')).toEqual([]);
+    expect(findHits(group(items, false, true), 'b.ild')).toEqual([]);
+  });
+
+  it('leaves out reasoning that isn’t shown', () => {
+    const thought: ItemDto[] = [
+      { type: 'user', text: 'q', files: [] },
+      { type: 'reasoning', text: 'The test is flaky.', done: true },
+      { type: 'assistant', text: 'a', done: true },
+    ];
+    expect(findHits(group(thought, false, false), 'flaky')).toEqual([]);
+    expect(findHits(group(thought, false, true), 'flaky').map((h) => h.part)).toEqual(['row', 'detail']);
+  });
+
+  it('matches the text as it reads: across formatting, not markup, and not from one line into the next', () => {
+    const said: ItemDto[] = [
+      { type: 'user', text: 'q', files: [] },
+      { type: 'assistant', text: 'Now **run** `npm test`, it is *fine*.\n\n- Next step', done: true },
+    ];
+    const hits = (q: string) => findHits(group(said, false, false), q).length;
+    expect([hits('run npm test'), hits('is fine'), hits('**'), hits('`'), hits('fine.Next')]).toEqual([1, 1, 0, 0, 0]);
+
+    const page = document.createElement('div');
+    page.innerHTML = '<p>Now <strong>run</strong> <code>npm test</code>, it is <em>fine</em>.</p>\n<ul><li>Next step</li></ul><span class="step-meta">2s</span>';
+    expect(rangesIn(page, matcher('run npm test')!).map((r) => r.toString())).toEqual(['run npm test']);
+    expect(rangesIn(page, matcher('fine.Next')!)).toEqual([]);
+    expect(rangesIn(page, matcher('2s')!)).toEqual([]);
+  });
+
+  it('finds what an approval card shows, with paths as its diff names them', () => {
+    const asked: ItemDto[] = [
+      { type: 'user', text: 'q', files: [] },
+      {
+        type: 'permission', kind: 'write', what: 'Edit a file', summary: 'Approve this', headline: null, intention: 'Fix the typo', command: null, warning: null, fileName: 'app.ts',
+        diff: 'diff --git a/C:/repo/src/app.ts b/C:/repo/src/app.ts\n--- a/C:/repo/src/app.ts\n+++ b/C:/repo/src/app.ts\n@@ -1 +1 @@\n-const a = 1\n+const b = 2\n',
+        diffTruncated: false, paths: [], url: null, server: null, tool: null, toolDescription: null, args: null, canSession: true, pending: true, outcome: null,
+      },
+    ];
+    const hits = (q: string) => findHits(group(asked, true, true), q, 'C:\\repo').length;
+    expect([hits('typo'), hits('src\\app.ts'), hits('const'), hits('Approve'), hits('+const')]).toEqual([1, 1, 2, 0, 0]);
+  });
+
+  it('opens with Ctrl+F, starts at the latest match and opens the step a match is in', async () => {
+    render(createElement(Transcript, { bay, items, visible: true }));
+    expect(document.body.textContent).not.toContain('missing import');
+    window.dispatchEvent(new CustomEvent('gs-chat-find', { detail: 5 }));
+    const box = await screen.findByRole('textbox', { name: 'Find in conversation' });
+    fireEvent.change(box, { target: { value: 'build' } });
+    expect(screen.getByText('6 of 6')).toBeTruthy();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByText('1 of 6')).toBeTruthy();
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    expect(screen.getByText('5 of 6')).toBeTruthy();
+    expect(document.body.textContent).toContain('missing import');
+    await new Promise((done) => requestAnimationFrame(done));
+    fireEvent.change(box, { target: { value: 'nowhere' } });
+    expect(screen.getByText('No results')).toBeTruthy();
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Find in conversation' })).toBeNull();
+    // What a find opened stays open.
+    expect(document.body.textContent).toContain('missing import');
   });
 });
