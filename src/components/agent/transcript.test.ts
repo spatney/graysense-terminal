@@ -123,7 +123,7 @@ describe('a live turn', () => {
         intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
         context: null, toolCount: 0, turns: 0, changedFiles: [], busySince: Date.now(), mission: null,
         canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null,
+        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null, resumable: true,
       },
     };
     render(createElement(Transcript, { bay, items: [{ type: 'user', text: 'fix the flaky test', files: [] }], visible: true }));
@@ -140,7 +140,7 @@ describe('rewinding', () => {
       intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
       context: null, toolCount: 0, turns: 2, changedFiles: [], busySince: null, mission: null,
       canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind, rewind: null, handoff: null,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind, rewind: null, handoff: null, resumable: true,
     } satisfies AgentDto,
   });
   const items: ItemDto[] = [
@@ -211,7 +211,7 @@ describe('what an agent was given from memory', () => {
       intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
       context: null, toolCount: 0, turns: 1, changedFiles: [], busySince: null, mission: null,
       canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null, resumable: true,
     },
   };
   const items: ItemDto[] = [
@@ -265,7 +265,7 @@ describe('where a resumed session left off', () => {
       intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
       context: null, toolCount: 0, turns: 1, changedFiles: [], busySince: null, mission: null,
       canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff, resumable: true,
     },
   });
   const items: ItemDto[] = [

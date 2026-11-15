@@ -635,6 +635,8 @@ pub struct AgentDto {
     pub rewind: Option<RewindDto>,
     /// Where a resumed session left off, until the user moves on.
     pub handoff: Option<HandoffDto>,
+    /// The session is reopened after a restart (it has a message; empty ones start afresh).
+    pub resumable: bool,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -760,6 +762,7 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         can_rewind: v.can_rewind(),
         rewind: rewind_dto(v),
         handoff: v.handoff.as_ref().map(|h| HandoffDto { summary: h.summary.clone(), next: h.next.clone(), at: h.at * 1000 }),
+        resumable: v.session_id.is_some() && v.has_history,
     }
 }
 

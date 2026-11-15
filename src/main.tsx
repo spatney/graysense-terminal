@@ -7,6 +7,7 @@ import './styles/app.css';
 import './styles/chat.css';
 import { App } from './App';
 import { connect } from './lib/api';
+import { installDrafts } from './lib/drafts';
 
 // Paint the last theme straight away, before the core's settings arrive.
 const saved = localStorage.getItem('gs-theme');
@@ -27,6 +28,7 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
+installDrafts();
 void connect().catch((e) => {
   console.error('could not reach the Graysense core', e);
 });

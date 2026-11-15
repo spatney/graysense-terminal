@@ -65,6 +65,8 @@ export interface AgentDto {
   rewind: RewindDto | null;
   /** Where a resumed session left off, until the user moves on. */
   handoff: HandoffDto | null;
+  /** The session is reopened after a restart (it has a message; empty ones start afresh). */
+  resumable: boolean;
 }
 
 export interface HandoffDto {
