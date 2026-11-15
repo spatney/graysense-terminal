@@ -323,6 +323,61 @@
   color: var(--text-faint);
 }
 
+/* "Where you left off", on a resumed session. */
+.handoff {
+  width: 100%;
+  max-width: var(--chat-measure);
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-2);
+  border-radius: 10px;
+  background: var(--elev);
+  font-size: 13px;
+  animation: riseIn 0.22s var(--ease-out) both;
+}
+
+.handoff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.handoff-head > .codicon {
+  color: var(--accent-2);
+}
+
+.handoff-head .icon-btn {
+  margin-left: auto;
+}
+
+.handoff p {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.handoff-next {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.handoff-next > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.handoff-next .btn {
+  flex: none;
+}
+
 .answer {
   font-size: 14px;
   line-height: 1.65;

@@ -439,6 +439,10 @@ impl Core {
                             v.carry_on = Some(CarryOn { working, unread });
                         }
                     }
+                    // Only a session left a while ago needs reminding where it was.
+                    if resumes {
+                        self.offer_handoff(bay, 12 * 3600);
+                    }
                 }
                 SavedBay::Shell { cwd, shell } => {
                     let cwd = PathBuf::from(cwd);
@@ -839,7 +843,30 @@ impl Core {
             return bay;
         }
         let dir = self.session_index.get(&id).and_then(|m| m.folder.clone()).map(PathBuf::from).filter(|d| d.is_dir()).or_else(|| session_cwd(&id).filter(|d| d.is_dir())).unwrap_or_else(|| self.settings.default_dir());
-        self.new_agent(dir, None, Some(id), None, false)
+        let bay = self.new_agent(dir, None, Some(id), None, false);
+        self.offer_handoff(bay, 0);
+        bay
+    }
+
+    /// Show where a resumed session left off (the summary learning wrote last time), when there's
+    /// one from at least `min_age` seconds ago.
+    fn offer_handoff(&mut self, bay: BayId, min_age: i64) {
+        if !self.settings.memory.enabled {
+            return;
+        }
+        let Some(v) = self.agent(bay) else { return };
+        // An agent carrying on by itself already knows where it was.
+        if v.incognito || v.carry_on.is_some() {
+            return;
+        }
+        let Some(session) = v.session_id.clone() else { return };
+        let Some(handoff) = self.memory.lock().handoff_for(&session) else { return };
+        if chrono::Utc::now().timestamp() - handoff.at < min_age {
+            return;
+        }
+        if let Some(v) = self.agent_mut(bay) {
+            v.handoff = Some(handoff);
+        }
     }
 
     pub fn launch_mission(&mut self, id: u64) {

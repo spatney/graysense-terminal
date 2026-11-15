@@ -123,7 +123,7 @@ describe('a live turn', () => {
         intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
         context: null, toolCount: 0, turns: 0, changedFiles: [], busySince: Date.now(), mission: null,
         canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null,
+        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null,
       },
     };
     render(createElement(Transcript, { bay, items: [{ type: 'user', text: 'fix the flaky test', files: [] }], visible: true }));
@@ -140,7 +140,7 @@ describe('rewinding', () => {
       intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
       context: null, toolCount: 0, turns: 2, changedFiles: [], busySince: null, mission: null,
       canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind, rewind: null,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind, rewind: null, handoff: null,
     } satisfies AgentDto,
   });
   const items: ItemDto[] = [
@@ -211,7 +211,7 @@ describe('what an agent was given from memory', () => {
       intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
       context: null, toolCount: 0, turns: 1, changedFiles: [], busySince: null, mission: null,
       canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff: null,
     },
   };
   const items: ItemDto[] = [
@@ -251,5 +251,55 @@ describe('what an agent was given from memory', () => {
     expect(act).toHaveBeenCalledWith({ type: 'memoryPin', id: 2, pinned: false });
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     expect(act).toHaveBeenCalledWith({ type: 'memoryRestore', id: 3 });
+  });
+});
+
+describe('where a resumed session left off', () => {
+  const resumed = (handoff: AgentDto['handoff'], busy = false): BayDto => ({
+    id: 4, kind: 'agent', title: 'Login', cwd: 'C:\\repo', folder: 'repo', shell: null,
+    agent: {
+      sessionId: 'abc', model: null, effort: null, contextTier: null, mode: 'interactive',
+      status: { kind: busy ? 'thinking' : 'idle', label: busy ? 'Thinking' : 'Ready', detail: null, busy, attention: false },
+      intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
+      context: null, toolCount: 0, turns: 1, changedFiles: [], busySince: null, mission: null,
+      canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null, handoff,
+    },
+  });
+  const items: ItemDto[] = [
+    { type: 'user', text: 'move login to device codes', files: [] },
+    { type: 'assistant', text: 'Started on it.', done: true },
+  ];
+  const handoff = { summary: 'Started moving the login flow to OAuth device codes.', next: 'Add a regression test for the token refresh', at: Date.now() - 2 * 86_400_000 };
+
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.mocked(act).mockReset().mockResolvedValue(null);
+    useUi.setState({ drafts: { 4: 'and keep the old flow' }, focusTick: {} });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('offers the next step, above what is being written', () => {
+    render(createElement(Transcript, { bay: resumed(handoff), items, visible: true }));
+    expect(screen.getByText('Where you left off')).toBeTruthy();
+    expect(screen.getByText('2 days ago')).toBeTruthy();
+    expect(screen.getByText(handoff.summary)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(useUi.getState().drafts[4]).toBe('Add a regression test for the token refresh\n\nand keep the old flow');
+    expect(useUi.getState().focusTick[4]).toBe(1);
+    expect(act).toHaveBeenCalledWith({ type: 'handoffDismiss', bay: 4 });
+  });
+
+  it('only summarises finished work, and stays out of the way while the agent works', () => {
+    render(createElement(Transcript, { bay: resumed({ ...handoff, next: null }), items, visible: true }));
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(act).toHaveBeenCalledWith({ type: 'handoffDismiss', bay: 4 });
+    cleanup();
+    render(createElement(Transcript, { bay: resumed(handoff, true), items, visible: true }));
+    expect(screen.queryByText('Where you left off')).toBeNull();
   });
 });

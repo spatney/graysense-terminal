@@ -633,6 +633,17 @@ pub struct AgentDto {
     pub can_rewind: bool,
     /// Rewinding the conversation, while the user confirms it and the runtime does it.
     pub rewind: Option<RewindDto>,
+    /// Where a resumed session left off, until the user moves on.
+    pub handoff: Option<HandoffDto>,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffDto {
+    pub summary: String,
+    pub next: Option<String>,
+    /// When it was learned (Unix ms).
+    pub at: i64,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -748,6 +759,7 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         queued: v.queued().map(|m| QueuedDto { text: m.text.clone(), files: m.files.clone(), steer: m.steer }).collect(),
         can_rewind: v.can_rewind(),
         rewind: rewind_dto(v),
+        handoff: v.handoff.as_ref().map(|h| HandoffDto { summary: h.summary.clone(), next: h.next.clone(), at: h.at * 1000 }),
     }
 }
 

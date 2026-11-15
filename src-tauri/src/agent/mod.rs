@@ -459,6 +459,8 @@ pub struct AgentView {
     pub carry_on: Option<CarryOn>,
     /// Rewinding the conversation to a message, while it's confirmed and done.
     pub rewind: Option<Rewind>,
+    /// Where a resumed session left off, shown until the user moves on.
+    pub handoff: Option<crate::memory::Handoff>,
 }
 
 /// An MCP App view docked in an agent bay.
@@ -616,6 +618,7 @@ impl AgentView {
             has_history: false,
             carry_on: None,
             rewind: None,
+            handoff: None,
         }
     }
 
@@ -665,6 +668,7 @@ impl AgentView {
         self.local_echo.push_back(Echo { sent: sent.trim().to_owned(), message, queued: mid_turn, dropped: false, item });
         self.sent_history.push(shown.to_owned());
         self.has_history = true;
+        self.handoff = None;
     }
 
     /// Messages sent mid-turn that the agent hasn't read yet, oldest first.

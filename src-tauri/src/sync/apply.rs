@@ -60,6 +60,7 @@ fn to_memory(id: memory::MemoryId, item: &Item, projects: &Projects) -> Memory {
         opens: 0,
         last_opened: None,
         keywords: item.keywords.clone(),
+        next: None,
     }
 }
 

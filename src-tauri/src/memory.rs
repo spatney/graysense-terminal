@@ -155,6 +155,17 @@ pub struct Revision {
     pub why: String,
 }
 
+/// Where a session left off, for picking it up again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Handoff {
+    /// What was done.
+    pub summary: String,
+    /// The next step, when the work wasn't finished.
+    pub next: Option<String>,
+    /// When it was learned (Unix seconds).
+    pub at: i64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Memory {
     pub id: MemoryId,
@@ -203,6 +214,9 @@ pub struct Memory {
     /// names ("bundler" for a memory about Vite). Only ever matched, never shown to agents.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keywords: Vec<String>,
+    /// A session summary's ([`Kind::Episode`]) next step, when the work wasn't finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,7 +351,7 @@ pub enum Op {
     Update { id: MemoryId, text: String, confidence: f32, evidence: Option<String>, keywords: Vec<String> },
     Delete { id: MemoryId, reason: Option<String> },
     Reinforce { id: MemoryId },
-    Episode { scope: Scope, text: String },
+    Episode { scope: Scope, text: String, next: Option<String> },
 }
 
 /// What applying a batch of ops did (for toasts and the transcript).
@@ -871,6 +885,7 @@ impl MemoryStore {
             opens: 0,
             last_opened: None,
             keywords: Vec::new(),
+            next: None,
         });
         self.touch();
         Some(id)
@@ -1058,6 +1073,7 @@ impl MemoryStore {
             opens: 0,
             last_opened: None,
             keywords: Vec::new(),
+            next: None,
         };
         let mut all_links: Vec<String> = links.to_vec();
         for l in links_in(&note.text) {
@@ -1217,11 +1233,16 @@ impl MemoryStore {
                         self.touch();
                     }
                 }
-                Op::Episode { scope, text } => {
+                Op::Episode { scope, text, next } => {
                     let lower = text.to_lowercase();
                     let housekeeping = lower.contains("memory") || lower.contains("memories") || lower.contains("acknowledg");
                     if text.trim().len() > 24 && !housekeeping && !looks_secret(&text) {
-                        self.insert(Kind::Episode, scope, &text, Origin::Learned, State::Active, 0.9, Some(source.clone()));
+                        let next = next.map(|n| clean(&n)).filter(|n| n.len() > 8 && !looks_secret(n));
+                        if let Some(id) = self.insert(Kind::Episode, scope, &text, Origin::Learned, State::Active, 0.9, Some(source.clone()))
+                            && let Some(m) = self.get_mut(id)
+                        {
+                            m.next = next;
+                        }
                     }
                 }
             }
@@ -1364,7 +1385,10 @@ impl MemoryStore {
         let mut recent = Vec::new();
         for m in episodes.into_iter().take(3) {
             let when = chrono::DateTime::from_timestamp(m.created, 0).map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string()).unwrap_or_default();
-            let line = format!("- {when}: {}\n", m.text);
+            let line = match &m.next {
+                Some(next) => format!("- {when}: {} Left to do: {next}\n", m.text),
+                None => format!("- {when}: {}\n", m.text),
+            };
             if spent + line.len() > budget + 400 {
                 break;
             }
@@ -1399,6 +1423,19 @@ impl MemoryStore {
         }
         s.push_str(NOTES_OUTRO);
         (s, used)
+    }
+
+    /// Where a session left off: the latest summary learning wrote for it.
+    pub fn handoff_for(&self, session: &str) -> Option<Handoff> {
+        self.memories
+            .iter()
+            .filter(|m| m.kind == Kind::Episode && m.state == State::Active)
+            .filter_map(|m| {
+                let at = m.sources.iter().filter(|s| s.session.as_deref() == Some(session)).map(|s| s.at).max()?;
+                Some((at, m))
+            })
+            .max_by_key(|(at, m)| (*at, m.id))
+            .map(|(at, m)| Handoff { summary: m.text.clone(), next: m.next.clone(), at })
     }
 
     /// Notes worth surfacing for a later prompt in a session: clearly relevant, not shown yet.
@@ -1639,7 +1676,9 @@ omit anything below 0.6. It is normal to return no operations.
 
 Also write \"episode\": one sentence of at most 200 characters summarising the work done in this excerpt (what was built, fixed, investigated or decided), \
 so a future agent can pick up where this left off. Use an empty string when no real work happened (questions, small talk, acknowledgements) \
-and never mention memories or this curation.
+and never mention memories or this curation. \
+When that work isn't finished, write \"next\": the next concrete step to continue it, as one instruction of at most 160 characters \
+(\"Add a regression test for the token refresh\"); use an empty string when the work is done or there is no episode.
 Every operation has every field: use id 0 for \"add\", and an empty string for any text, evidence, kind or scope that doesn't apply. \
 Use \"evidence\" for a short quote of the USER's words that supports the operation. \
 For \"add\" and \"update\", give \"keywords\": 3 to 6 short lowercase search terms a developer might use when this memory would help \
@@ -1672,9 +1711,10 @@ pub fn curator_schema() -> Value {
                     "required": ["op", "id", "kind", "scope", "text", "confidence", "evidence", "keywords"]
                 }
             },
-            "episode": { "type": "string" }
+            "episode": { "type": "string" },
+            "next": { "type": "string" }
         },
-        "required": ["ops", "episode"]
+        "required": ["ops", "episode", "next"]
     })
 }
 
@@ -1731,7 +1771,8 @@ pub fn parse_curator(content: &str, project: Option<&Project>) -> Vec<Op> {
     }
     if let (Some(ep), Some(p)) = (v.get("episode").and_then(|x| x.as_str()), project)
         && !ep.trim().is_empty() {
-            ops.push(Op::Episode { scope: p.scope(), text: ep.trim().to_owned() });
+            let next = v.get("next").and_then(|x| x.as_str()).map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
+            ops.push(Op::Episode { scope: p.scope(), text: ep.trim().to_owned(), next });
         }
     ops
 }
@@ -1935,6 +1976,31 @@ mod tests {
         s.apply(ops, Source::default(), Some(0.85));
         let saved = &s.memories.iter().find(|m| m.kind == Kind::Episode).unwrap().text;
         assert!(cut_after_a_word(saved, &episode), "{saved}");
+    }
+
+    #[test]
+    fn a_session_hands_off_where_it_left_off() {
+        let p = Project { key: "c:\\repo".into(), name: "repo".into(), root: PathBuf::from("C:\\repo") };
+        let from = |session: &str, at: i64| Source { session: Some(session.into()), title: None, quote: None, at };
+        let learn = |s: &mut MemoryStore, episode: &str, next: &str, source: Source| {
+            s.apply(parse_curator(&json!({ "ops": [], "episode": episode, "next": next }).to_string(), Some(&p)), source, Some(0.85));
+        };
+        let mut s = store();
+        learn(&mut s, "Started moving the login flow to OAuth device codes.", "Add a regression test for the token refresh", from("abc", 100));
+        // A later stretch of the same session finished the work: the latest summary is the one that counts.
+        learn(&mut s, "Finished the OAuth device code login and its tests.", "", from("abc", 200));
+        learn(&mut s, "Profiled the slow startup down to the settings loader.", "Cache the parsed settings file", from("xyz", 300));
+
+        let h = s.handoff_for("abc").unwrap();
+        assert_eq!(h.summary, "Finished the OAuth device code login and its tests.");
+        assert_eq!((h.next, h.at), (None, 200));
+        assert_eq!(s.handoff_for("xyz").unwrap().next.as_deref(), Some("Cache the parsed settings file"));
+        assert!(s.handoff_for("elsewhere").is_none());
+
+        // New agents in the project are told what was left to do.
+        let (block, _) = s.context_for(Some(&p), None, 2000, &HashSet::new());
+        assert!(block.contains("Profiled the slow startup down to the settings loader. Left to do: Cache the parsed settings file"), "{block}");
+        assert!(block.contains("Finished the OAuth device code login and its tests.\n"), "{block}");
     }
 
     #[test]

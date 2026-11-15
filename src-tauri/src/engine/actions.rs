@@ -59,6 +59,8 @@ pub enum Action {
     /// Copy the session into a new one: up to the message at `index` (put in the copy's message
     /// box), or all of it.
     Fork { bay: BayId, #[serde(default)] index: Option<usize> },
+    /// Put away the note on where a resumed session left off.
+    HandoffDismiss { bay: BayId },
     Reply { bay: BayId, index: usize, reply: Reply },
     ForgetMemories { bay: BayId, index: usize },
     CloseCanvas { bay: BayId, instance: String },
@@ -331,6 +333,12 @@ impl Core {
                 ok
             }
             Action::Fork { bay, index } => self.fork(bay, index).map(|_| Value::Null),
+            Action::HandoffDismiss { bay } => {
+                if let Some(v) = self.agent_mut(bay) {
+                    v.handoff = None;
+                }
+                ok
+            }
             Action::Reply { bay, index, reply } => self.reply(bay, index, reply).map(|_| Value::Null),
             Action::ForgetMemories { bay, index } => {
                 let ids = match self.agent_mut(bay).and_then(|v| v.items.get_mut(index)) {

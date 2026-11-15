@@ -63,6 +63,17 @@ export interface AgentDto {
   canRewind: boolean;
   /** Rewinding the conversation, while the user confirms it and Copilot does it. */
   rewind: RewindDto | null;
+  /** Where a resumed session left off, until the user moves on. */
+  handoff: HandoffDto | null;
+}
+
+export interface HandoffDto {
+  /** What was done. */
+  summary: string;
+  /** The next step, when the work wasn't finished. */
+  next: string | null;
+  /** When it was learned (Unix ms). */
+  at: number;
 }
 
 export interface RewindFileDto {
@@ -695,6 +706,7 @@ export type Action =
   | { type: 'rewindConfirm'; bay: BayId; restoreFiles: boolean; text?: string | null }
   | { type: 'rewindCancel'; bay: BayId }
   | { type: 'fork'; bay: BayId; index?: number }
+  | { type: 'handoffDismiss'; bay: BayId }
   | { type: 'reply'; bay: BayId; index: number; reply: Reply }
   | { type: 'forgetMemories'; bay: BayId; index: number }
   | { type: 'closeCanvas'; bay: BayId; instance: string }

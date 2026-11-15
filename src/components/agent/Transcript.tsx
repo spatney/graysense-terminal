@@ -1,10 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { act, captureNote, revealMemory } from '../../lib/api';
-import { baseName, duration, plural } from '../../lib/format';
+import { agoLong, baseName, duration, plural } from '../../lib/format';
 import { langOf } from '../../lib/highlight';
 import { isImagePath } from '../../lib/images';
-import { setDraft, focusComposer, useUi } from '../../lib/store';
-import type { AgentDto, AssistantItem, BayDto, FileEdit, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
+import { setDraft, fillDraft, focusComposer, useUi } from '../../lib/store';
+import type { AgentDto, AssistantItem, BayDto, FileEdit, HandoffDto, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
 import { ImageThumb } from '../ImageThumb';
 import { CodeBlock, Markdown } from '../Markdown';
 import { Icon, copyText, showMenu } from '../ui';
@@ -721,6 +721,44 @@ function QueuedTurnView({ m }: { m: QueuedMessage }) {
   );
 }
 
+/** Where a resumed session left off, from what was learned when it was last used. */
+function HandoffCard({ bayId, handoff }: { bayId: number; handoff: HandoffDto }) {
+  const dismiss = () => void act({ type: 'handoffDismiss', bay: bayId });
+  const next = handoff.next;
+  return (
+    <section className="handoff" aria-label="Where you left off">
+      <div className="handoff-head">
+        <Icon name="history" />
+        <b>Where you left off</b>
+        <span className="faint">{agoLong(handoff.at / 1000)}</span>
+        <button type="button" className="icon-btn sm" data-tip="Dismiss" aria-label="Dismiss" onClick={dismiss}>
+          <Icon name="close" />
+        </button>
+      </div>
+      <p>{handoff.summary}</p>
+      {next && (
+        <div className="handoff-next">
+          <span>
+            <span className="faint">Next: </span>
+            {next}
+          </span>
+          <button
+            type="button"
+            className="btn sm"
+            data-tip="Put this in the message box"
+            onClick={() => {
+              fillDraft(bayId, next);
+              dismiss();
+            }}
+          >
+            Continue
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ------------------------------------------------------------------ transcript
 
 const PAGE = 60;
@@ -818,6 +856,7 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
           {agent.queued.map((m, i) => (
             <QueuedTurnView key={`queued-${i}`} m={m} />
           ))}
+          {agent.handoff && !agent.status.busy && <HandoffCard bayId={bay.id} handoff={agent.handoff} />}
         </div>
       </div>
       {away && (

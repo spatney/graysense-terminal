@@ -182,6 +182,11 @@ export function focusComposer(bay: BayId) {
   useUi.setState((s) => ({ focusTick: { ...s.focusTick, [bay]: (s.focusTick[bay] ?? 0) + 1 } }));
 }
 
+/** Put `text` in a bay's message box, above anything being written there, and focus it. */
+export function fillDraft(bay: BayId, text: string) {
+  useUi.setState((s) => ({ drafts: { ...s.drafts, [bay]: mergeDraft(text, s.drafts[bay]) }, focusTick: { ...s.focusTick, [bay]: (s.focusTick[bay] ?? 0) + 1 } }));
+}
+
 export function dockOf(bay: BayId): DockState {
   return useUi.getState().dock[bay] ?? { open: false, tab: 'files', width: 420 };
 }

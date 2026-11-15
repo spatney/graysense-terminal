@@ -537,6 +537,7 @@ pub(crate) mod tests {
             opens: 0,
             last_opened: None,
             keywords: Vec::new(),
+            next: None,
         }
     }
 
