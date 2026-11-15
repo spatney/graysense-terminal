@@ -328,6 +328,7 @@ const TICK: Duration = Duration::from_millis(100);
 impl Core {
     pub fn new(rt: Arc<tokio::runtime::Runtime>, startup: Startup, terminals: Terminals, courier: Courier) -> (Self, Receiver<Evt>) {
         let settings = Settings::load();
+        crate::memory::set_no_learn(&settings.memory.no_learn);
         let (tx, rx) = channel();
         let backend = Backend::spawn(&rt, UiTx::new(tx));
         backend.send(Cmd::Connect);
@@ -1065,6 +1066,7 @@ impl Core {
             self.dirty.sessions = true;
         }
         crate::memory::set_switches(self.settings.memory.enabled, self.settings.memory.inject);
+        crate::memory::set_no_learn(&self.settings.memory.no_learn);
         self.settings_dirty = true;
     }
 
@@ -1799,12 +1801,18 @@ pub fn run_loop(core: Arc<Mutex<Core>>, rx: Receiver<Evt>) {
 }
 
 /// Save a "remember that …" request from a prompt immediately, with an Undo chip. This works
-/// even while background learning is paused: the user asked explicitly.
+/// even while background learning is paused: the user asked explicitly. Not in a project the
+/// user turned learning off in, though: nothing from there is saved.
 fn capture_explicit_memory(memory: &Mutex<MemoryStore>, enabled: bool, view: &mut AgentView, prompt: &str) {
     if view.incognito || !enabled {
         return;
     }
     let Some((text, kind, about_project)) = crate::memory::explicit_request(prompt) else { return };
+    if !crate::memory::learns_in(&view.project.key) {
+        let name = view.project.name.clone();
+        view.notice(Level::Info, format!("Not saved to memory: learning is off in {name}. Turn it back on from the folder menu."));
+        return;
+    }
     let scope = if about_project { view.project.scope() } else { Scope::Global };
     let source = Source { session: view.session_id.clone(), title: None, quote: Some(prompt.trim().to_owned()), at: crate::memory::now() };
     let id = memory.lock().insert(kind, scope, &text, Origin::User, MemoryState::Active, 0.95, Some(source));

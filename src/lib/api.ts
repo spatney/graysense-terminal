@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { applyUpdate, focusComposer, openOverlay, toast, useUi } from './store';
-import type { Action, BayId, DirEntry, PanelId, SearchHit, UiUpdate } from './types';
+import type { Action, BayId, DirEntry, PanelId, SearchHit, Settings, UiUpdate } from './types';
 
 /** Run a core action. Errors are shown as a toast and resolve to `undefined`. */
 export async function act<T = unknown>(action: Action): Promise<T | undefined> {
@@ -82,6 +82,21 @@ export function captureNote(prefill: { text?: string; files?: string[]; session?
 
 export function setSide(panel: PanelId | 'hidden') {
   return act({ type: 'setSide', panel });
+}
+
+/** Whether Graysense learns from conversations in a project (by its memory key). */
+export function learnsIn(settings: Settings | null | undefined, project: string | null | undefined): boolean {
+  return !project || !(settings?.['memory.no_learn_projects'] ?? []).includes(project);
+}
+
+/** Turn learning from conversations in one project (by its memory key) on or off. With `name`, say so in a toast. */
+export async function setProjectLearning(project: string, on: boolean, name?: string) {
+  const before = useUi.getState().settings?.['memory.no_learn_projects'] ?? [];
+  const next = on ? before.filter((k) => k !== project) : before.includes(project) ? before : [...before, project];
+  const done = await act({ type: 'setSettings', changes: { 'memory.no_learn_projects': next } });
+  if (done === undefined || name == null) return;
+  if (on) toast('info', `Graysense learns from ${name} again.`);
+  else toast('info', `Graysense won't learn from ${name}. Agents there still get your memories.`, ['Undo', { type: 'setSettings', changes: { 'memory.no_learn_projects': before } }]);
 }
 
 /** Open or close a side panel, VS Code style: clicking the open one hides it. */

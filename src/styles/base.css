@@ -476,6 +476,14 @@ button.chip:hover {
   color: var(--danger);
 }
 
+button.badge {
+  border: 0;
+}
+
+button.badge:hover {
+  color: var(--text);
+}
+
 .count {
   display: inline-grid;
   place-items: center;

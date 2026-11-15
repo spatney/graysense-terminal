@@ -106,17 +106,24 @@ pub struct MemorySettings {
     pub model: Option<String>,
     /// Merge memories that say the same thing, about once a week.
     pub tidy: bool,
+    /// Projects (memory keys) Graysense doesn't learn from. Their memories are still shared.
+    pub no_learn: Vec<String>,
 }
 
 impl Default for MemorySettings {
     fn default() -> Self {
-        Self { enabled: true, learn: true, inject: true, review_all: false, model: None, tidy: true }
+        Self { enabled: true, learn: true, inject: true, review_all: false, model: None, tidy: true, no_learn: Vec::new() }
     }
 }
 
 impl MemorySettings {
     pub fn learning(&self) -> bool {
         self.enabled && self.learn
+    }
+
+    /// Whether conversations in a project (its memory key) may be learned from.
+    pub fn learns_in(&self, project: &str) -> bool {
+        !self.no_learn.iter().any(|k| k == project)
     }
 
     /// Confidence at which learned memories are saved without review.
@@ -226,6 +233,12 @@ impl Settings {
         add("memory.review_all", json!(self.memory.review_all), json!("boolean"), "Ask the user before saving anything learned.");
         add("memory.learning_model", json!(self.memory.model), model_choice, "Model the memory curator uses (null = lowest cost).");
         add("memory.tidy", json!(self.memory.tidy), json!("boolean"), "Merge memories that say the same thing, about once a week (while learning is on).");
+        add(
+            "memory.no_learn_projects",
+            json!(self.memory.no_learn),
+            json!("list of project folders (git roots); [] for none"),
+            "Projects Graysense doesn't learn from: nothing said there is learned or saved as a memory, and no approval rules are learned. Memories are still shared there.",
+        );
         Value::Object(out)
     }
 
@@ -329,6 +342,18 @@ impl Settings {
                 "memory.review_all" => next.memory.review_all = flag()?,
                 "memory.learning_model" => next.memory.model = model()?,
                 "memory.tidy" => next.memory.tidy = flag()?,
+                "memory.no_learn_projects" => {
+                    let items = if v.is_null() { &[][..] } else { v.as_array().ok_or_else(bad)?.as_slice() };
+                    let mut keys: Vec<String> = Vec::new();
+                    for item in items {
+                        let dir = item.as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(bad)?;
+                        let key = crate::memory::project_key(Path::new(dir));
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                    next.memory.no_learn = keys;
+                }
                 other => return Err(format!("Unknown setting “{other}”. Call graysense_settings with action \"get\" to list them.")),
             }
             done.push(format!("{key} → {}", if v.is_null() { "default".to_owned() } else { v.to_string().trim_matches('"').to_owned() }));
@@ -661,6 +686,23 @@ mod tests {
         assert!(settings.apply_patch(json!({ "default_context": "1M" }).as_object().unwrap(), &[]).is_err());
         settings.apply_patch(json!({ "default_context": null }).as_object().unwrap(), &[]).unwrap();
         assert_eq!(settings.default_context, None);
+    }
+
+    #[test]
+    fn projects_not_to_learn_in_are_stored_as_memory_keys() {
+        let mut settings = Settings::default();
+        assert!(settings.memory.learns_in(r"c:\code\app"));
+        let changes = json!({ "memory.no_learn_projects": [r"C:\Code\App\", "c:/code/app", r"D:\client"] });
+        settings.apply_patch(changes.as_object().unwrap(), &[]).unwrap();
+        assert_eq!(settings.memory.no_learn, [r"c:\code\app", r"d:\client"]);
+        assert!(!settings.memory.learns_in(r"c:\code\app") && settings.memory.learns_in(r"c:\code\other"));
+        assert_eq!(settings.values()["memory.no_learn_projects"], json!([r"c:\code\app", r"d:\client"]));
+        // A list of folders only; a bad entry changes nothing.
+        assert!(settings.apply_patch(json!({ "memory.no_learn_projects": r"c:\x" }).as_object().unwrap(), &[]).is_err());
+        assert!(settings.apply_patch(json!({ "memory.no_learn_projects": [""] }).as_object().unwrap(), &[]).is_err());
+        assert_eq!(settings.memory.no_learn.len(), 2);
+        settings.apply_patch(json!({ "memory.no_learn_projects": null }).as_object().unwrap(), &[]).unwrap();
+        assert!(settings.memory.no_learn.is_empty());
     }
 
     #[test]

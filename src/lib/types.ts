@@ -613,6 +613,8 @@ export interface Settings {
   'memory.review_all': boolean;
   'memory.learning_model': string | null;
   'memory.tidy': boolean;
+  /** Projects (memory keys) Graysense doesn't learn from. */
+  'memory.no_learn_projects': string[];
   recent_dirs: string[];
 }
 

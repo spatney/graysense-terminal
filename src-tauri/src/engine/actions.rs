@@ -399,6 +399,9 @@ impl Core {
                 if !self.settings.memory.learning() {
                     return Err("Learning is off. Turn it on in Memory settings.".into());
                 }
+                if let Some(v) = self.agent(bay).filter(|v| !self.settings.memory.learns_in(&v.project.key)) {
+                    return Err(format!("Learning is off in {}. Turn it back on from the folder menu.", v.project.name));
+                }
                 self.start_learning(bay);
                 self.toast(Level::Info, "Reading this conversation for things to remember…");
                 ok

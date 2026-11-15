@@ -29,6 +29,12 @@ fn learn_queue_path() -> PathBuf {
     settings::config_dir().join("memory-queue.json")
 }
 
+impl LearnJob {
+    fn project_key(&self) -> String {
+        crate::memory::project_key(&self.project_root)
+    }
+}
+
 impl Core {
     /// Read a conversation in the background and file what's worth keeping.
     pub(super) fn start_learning(&mut self, bay: BayId) {
@@ -37,6 +43,9 @@ impl Core {
             return;
         }
         let memory = self.memory.clone();
+        if self.agent(bay).is_some_and(|v| !self.settings.memory.learns_in(&v.project.key)) {
+            return;
+        }
         let Some(v) = self.agent_mut(bay) else { return };
         if v.incognito {
             return;
@@ -65,7 +74,7 @@ impl Core {
         let mut queue: Vec<LearnJob> = self.learn_jobs.drain().map(|(_, j)| j).collect();
         for b in &self.bays {
             let BayKind::Agent(v) = &b.kind else { continue };
-            if v.incognito || v.learn_cursor == usize::MAX {
+            if v.incognito || v.learn_cursor == usize::MAX || !self.settings.memory.learns_in(&v.project.key) {
                 continue;
             }
             if let Some(transcript) = v.transcript_since(v.learn_cursor) {
@@ -89,6 +98,7 @@ impl Core {
         if !self.settings.memory.learning() {
             return;
         }
+        let queue: Vec<LearnJob> = queue.into_iter().filter(|j| self.settings.memory.learns_in(&j.project_key())).collect();
         let model = self.curator_model();
         for job in queue.into_iter().take(6) {
             // A bay id no bay uses, so the answer is filed without a transcript to show it in.
@@ -117,6 +127,10 @@ impl Core {
         self.dirty.memory = true;
         self.memory_last_run = Some((crate::memory::now(), result.as_ref().err().cloned()));
         let Ok(content) = result else { return };
+        // Learning was turned off in that project while the curator was reading.
+        if !self.settings.memory.learns_in(&job.project_key()) {
+            return;
+        }
         let project = Project::for_dir(&job.project_root);
         let ops = crate::memory::parse_curator(&content, Some(&project));
         tracing::info!(ops = ops.len(), "memory curator finished");
@@ -156,13 +170,15 @@ impl Core {
     /// Due curator runs and approval learning.
     pub(super) fn memory_tick(&mut self) {
         crate::memory::set_switches(self.settings.memory.enabled, self.settings.memory.inject);
+        crate::memory::set_no_learn(&self.settings.memory.no_learn);
         let learning = self.settings.memory.learning();
+        let off = &self.settings.memory.no_learn;
         let now = Instant::now();
         let mut due = Vec::new();
         let mut approvals = Vec::new();
         for b in self.bays.iter_mut() {
             let BayKind::Agent(v) = &mut b.kind else { continue };
-            if !learning || v.incognito {
+            if !learning || v.incognito || off.contains(&v.project.key) {
                 v.learn_due = None;
                 v.approval_log.clear();
                 // Nothing said while learning is off is ever learned later.

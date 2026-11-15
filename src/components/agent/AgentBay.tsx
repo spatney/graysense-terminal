@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { act, captureNote, setSide } from '../../lib/api';
+import { act, captureNote, learnsIn, setProjectLearning, setSide } from '../../lib/api';
 import { setDock, useUi } from '../../lib/store';
 import type { BayDto, ItemDto } from '../../lib/types';
 import { agentFolderItems } from '../folders';
@@ -18,6 +18,7 @@ function BayHead({ bay }: { bay: BayDto }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const dockOpen = useUi((s) => s.dock[bay.id]?.open ?? false);
   const missions = useUi((s) => s.missions);
+  const notLearning = useUi((s) => !agent.incognito && (s.settings?.['memory.enabled'] ?? true) && !learnsIn(s.settings, agent.projectKey));
   const mission = agent.mission != null ? missions.find((m) => m.id === agent.mission) : null;
   const extras = agent.canvases.length + agent.apps.length;
 
@@ -32,7 +33,7 @@ function BayHead({ bay }: { bay: BayDto }) {
     const items: MenuItem[] = [
       { label: 'Rename', icon: 'edit', onSelect: () => setRenaming(bay.title) },
       { label: 'Save a note about this session', icon: 'bookmark', hint: 'Ctrl+Shift+S', onSelect: () => captureNote({ session: agent.sessionId, title: bay.title }) },
-      { label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', disabled: agent.incognito, onSelect: () => void act({ type: 'learnNow', bay: bay.id }) },
+      { label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', disabled: agent.incognito || notLearning, onSelect: () => void act({ type: 'learnNow', bay: bay.id }) },
       { label: 'Fork into a new session', icon: 'repo-forked', disabled: !agent.sessionId || agent.deferred || agent.status.busy, onSelect: () => void act({ type: 'fork', bay: bay.id }) },
       { label: agent.autoApprove ? 'Ask before running tools' : 'Approve all tool calls', icon: 'shield', onSelect: () => void act({ type: 'setAutoApprove', bay: bay.id, on: !agent.autoApprove }) },
       { label: 'Clear transcript', icon: 'clear-all', onSelect: () => void act({ type: 'clearTranscript', bay: bay.id }) },
@@ -67,6 +68,16 @@ function BayHead({ bay }: { bay: BayDto }) {
         <span className="badge" data-tip="Doesn't use or add to memory">
           Incognito
         </span>
+      )}
+      {notLearning && !agent.deferred && (
+        <button
+          type="button"
+          className="badge"
+          data-tip={`Graysense doesn't learn from ${agent.project || 'this project'}. Agents here still get your memories. Click to learn here again.`}
+          onClick={() => void setProjectLearning(agent.projectKey, true, agent.project || undefined)}
+        >
+          Not learning
+        </button>
       )}
       {!agent.deferred && (
         <button type="button" className="bay-crumb" data-tip={bay.cwd} onClick={(e) => folderMenu(e.currentTarget)}>

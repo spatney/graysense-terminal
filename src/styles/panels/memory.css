@@ -96,6 +96,55 @@
   padding: 0 0 12px;
 }
 
+.mem-set-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mem-set-projects li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.mem-set-projects li > .ellipsis {
+  flex: 1;
+  min-width: 0;
+}
+
+.mem-set-projects .codicon {
+  color: var(--text-faint);
+}
+
+.mem-project-learn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--elev);
+  cursor: pointer;
+}
+
+.mem-project-learn > .codicon {
+  margin-top: 1px;
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.mem-project-learn.mem-paused > .codicon {
+  color: var(--text-faint);
+}
+
 .mem-set-row .toggle {
   margin-top: 1px;
 }

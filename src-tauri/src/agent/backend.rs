@@ -1900,6 +1900,13 @@ impl github_copilot_sdk::MemoryStore for LocalMemory {
         if !crate::memory::enabled() {
             return Err(github_copilot_sdk::Error::with_message(github_copilot_sdk::ErrorKind::InvalidConfig, "Memory is turned off in Graysense, so nothing was saved."));
         }
+        let project = self.memory.project();
+        if !crate::memory::learns_in(&project.key) {
+            return Err(github_copilot_sdk::Error::with_message(
+                github_copilot_sdk::ErrorKind::InvalidConfig,
+                format!("The user turned off learning in {} in Graysense, so nothing from this project is saved to memory. Nothing was saved.", project.name),
+            ));
+        }
         let fact = m.fact.trim().to_owned();
         let lower = format!("{} {}", m.subject, fact).to_lowercase();
         let about_user = ["user prefer", "user likes", "user wants", "user's preference", "prefers ", "the user "].iter().any(|k| lower.contains(k)) && !lower.contains("this repo") && !lower.contains("this project");
@@ -1910,7 +1917,7 @@ impl github_copilot_sdk::MemoryStore for LocalMemory {
         } else {
             Kind::Fact
         };
-        let scope = if about_user { Scope::Global } else { self.memory.project().scope() };
+        let scope = if about_user { Scope::Global } else { project.scope() };
         let quote = [m.reason.trim(), m.citations.trim()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
         let source = Source { session: Some(m.session_id.to_string()), title: None, quote: (!quote.is_empty()).then_some(quote), at: crate::memory::now() };
         let id = self.memory.store.lock().insert(kind, scope, &fact, Origin::Agent, State::Active, 0.9, Some(source));

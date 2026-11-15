@@ -1,6 +1,6 @@
 import '../../styles/panels/memory.css';
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { act, pickFiles, pickSave, tryAct } from '../../lib/api';
+import { act, learnsIn, pickFiles, pickSave, setProjectLearning, tryAct } from '../../lib/api';
 import { ago, agoLong, baseName, modelLabel, plural } from '../../lib/format';
 import { openOverlay, toast, useUi } from '../../lib/store';
 import type { MemoryDto, MemoryKind, MemoryStateDto, ModelDto, Settings } from '../../lib/types';
@@ -673,6 +673,7 @@ export function MemoryPanel() {
                 <Icon name="chevron-right" />
               </button>
             )}
+            {view === 'project' && project && enabled && !searching && <ProjectLearning project={project} on={learnsIn(settings, project.key)} />}
             {note && items.length > 0 && (
               <div className="mem-viewhead">
                 <p>{note}</p>
@@ -837,6 +838,20 @@ function StatusLine({ mem, learnOn, now, onTurnOn }: { mem: MemoryStateDto; lear
   );
 }
 
+/** Whether Graysense learns from the focused project, at the top of its view. */
+function ProjectLearning({ project, on }: { project: Project; on: boolean }) {
+  return (
+    <label className={`mem-project-learn${on ? '' : ' mem-paused'}`}>
+      <Icon name={on ? 'lightbulb-sparkle' : 'circle-slash'} />
+      <span className="mem-set-text">
+        <span className="mem-set-title">Learn from {project.name}</span>
+        <span className="mem-set-desc">{on ? 'Conventions and how-tos from conversations here are saved.' : "Nothing said here is learned or saved. Agents here still get what's below."}</span>
+      </span>
+      <Toggle on={on} label={`Learn from ${project.name}`} onChange={(v) => void setProjectLearning(project.key, v)} />
+    </label>
+  );
+}
+
 function OffCard({ onTurnOn }: { onTurnOn: () => void }) {
   return (
     <div className="mem-off" role="status">
@@ -915,8 +930,20 @@ function SettingsCard({ settings, models, onImported, onClose }: { settings: Set
   const synced = useUi((s) => s.sync?.repo != null);
   const tidying = useUi((s) => s.memory.tidying);
   const lastTidy = useUi((s) => s.memory.lastTidy);
+  const bays = useUi((s) => s.bays);
+  const memories = useUi((s) => s.memory.memories);
   const now = useNow(true);
   const off = !settings || !settings['memory.enabled'];
+  const noLearn = settings?.['memory.no_learn_projects'] ?? [];
+  const anyOff = noLearn.length > 0;
+  // Keys are lowercased paths; show a project's name as its agents or memories spell it.
+  const projectNames = useMemo(() => {
+    const names = new Map<string, string>();
+    if (!anyOff) return names;
+    for (const m of memories) if (m.project && m.projectName) names.set(m.project, m.projectName);
+    for (const b of bays) if (b.agent?.projectKey && b.agent.project) names.set(b.agent.projectKey, b.agent.project);
+    return names;
+  }, [anyOff, bays, memories]);
   const model = settings?.['memory.learning_model'] ?? null;
   const list = models ?? [];
   const keys = (e: React.KeyboardEvent<HTMLElement>) => {
@@ -962,6 +989,25 @@ function SettingsCard({ settings, models, onImported, onClose }: { settings: Set
         </button>
         {lastTidy != null && !tidying && <span className="mem-set-desc">Last tidied {agoLong(lastTidy, now)}</span>}
       </div>
+      {noLearn.length > 0 && (
+        <div className={`mem-set-field${off ? ' mem-disabled' : ''}`}>
+          <span className="mem-set-title">Not learning from</span>
+          <ul className="mem-set-projects">
+            {noLearn.map((key) => (
+              <li key={key}>
+                <Icon name="folder" />
+                <span className="ellipsis" data-tip={key}>
+                  {projectNames.get(key) ?? baseName(key)}
+                </span>
+                <button type="button" className="link-btn" disabled={off} onClick={() => void setProjectLearning(key, true)}>
+                  Learn again
+                </button>
+              </li>
+            ))}
+          </ul>
+          <span className="mem-set-desc">Agents in these projects still get your memories. Turn learning off in a project from its folder menu.</span>
+        </div>
+      )}
       <div className={`mem-set-field${off ? ' mem-disabled' : ''}`}>
         <label className="mem-set-title" htmlFor={`${id}-model`}>
           Learning model

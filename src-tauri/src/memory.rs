@@ -33,6 +33,20 @@ pub fn set_switches(enabled: bool, sharing: bool) {
     SHARING.store(sharing, Ordering::Relaxed);
 }
 
+/// Projects (memory keys) Graysense doesn't learn from, mirrored from settings like the switches.
+static NO_LEARN: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+pub fn set_no_learn(keys: &[String]) {
+    if NO_LEARN.read().unwrap_or_else(|e| e.into_inner()).as_slice() != keys {
+        *NO_LEARN.write().unwrap_or_else(|e| e.into_inner()) = keys.to_vec();
+    }
+}
+
+/// Whether what's said in a project may be saved to memory (learned, or stored by an agent).
+pub fn learns_in(project: &str) -> bool {
+    !NO_LEARN.read().unwrap_or_else(|e| e.into_inner()).iter().any(|k| k == project)
+}
+
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }

@@ -1,4 +1,4 @@
-import { act, changeFolder, newShell, setSide } from '../lib/api';
+import { act, changeFolder, learnsIn, newShell, setProjectLearning, setSide } from '../lib/api';
 import { baseName, shortPath } from '../lib/format';
 import { useUi } from '../lib/store';
 import type { BayDto } from '../lib/types';
@@ -60,5 +60,19 @@ export function agentFolderItems(bay: BayDto): MenuItem[] {
     { label: 'New agent here', icon: 'add', onSelect: () => void act({ type: 'newAgent', dir: bay.cwd }) },
     { sep: true },
     { label: 'Copy path', icon: 'copy', onSelect: () => void copyText(bay.cwd, 'Path copied') },
+    ...projectLearningItems(bay),
   ];
+}
+
+/** "Don't learn from <project>" (or "Learn from <project> again"), while memory is on. */
+function projectLearningItems(bay: BayDto): MenuItem[] {
+  const settings = useUi.getState().settings;
+  const a = bay.agent;
+  if (!a?.projectKey || a.incognito || !(settings?.['memory.enabled'] ?? true)) return [];
+  const key = a.projectKey;
+  const name = a.project || baseName(key);
+  const item: MenuItem = learnsIn(settings, key)
+    ? { label: `Don't learn from ${name}`, icon: 'circle-slash', tip: 'Nothing said in this project is learned or saved to memory. Agents here still get your memories.', onSelect: () => void setProjectLearning(key, false, name) }
+    : { label: `Learn from ${name} again`, icon: 'lightbulb-sparkle', tip: 'Learning is off in this project', onSelect: () => void setProjectLearning(key, true, name) };
+  return [{ sep: true }, item];
 }
