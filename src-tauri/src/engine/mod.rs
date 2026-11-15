@@ -291,6 +291,8 @@ pub struct Core {
     activity_new: Vec<LogLineDto>,
     toasts_new: Vec<ToastDto>,
     next_toast: u64,
+    /// The window has loaded the state: until then toasts wait (and go out with the snapshot).
+    ui_connected: bool,
     app_replies: Vec<Value>,
     attention: bool,
     quit: bool,
@@ -353,6 +355,7 @@ impl Core {
             activity_new: Vec::new(),
             toasts_new: Vec::new(),
             next_toast: 1,
+            ui_connected: false,
             app_replies: Vec::new(),
             attention: false,
             quit: false,
@@ -476,8 +479,7 @@ impl Core {
         }
         let ws = self.workspace();
         let sig = serde_json::to_string(&ws).unwrap_or_default();
-        if sig != self.last_ws {
-            settings::write_json(&Self::workspace_path(), &ws);
+        if sig != self.last_ws && settings::write_json(&Self::workspace_path(), &ws).is_ok() {
             self.last_ws = sig;
         }
     }
@@ -1388,10 +1390,10 @@ impl Core {
         self.memory.lock().save_if_dirty();
         self.session_index.save_if_dirty();
         self.save_workspace_if_changed();
-        if self.settings_dirty {
-            self.settings.save();
+        if self.settings_dirty && self.settings.save() {
             self.settings_dirty = false;
         }
+        self.sync_save_if_due();
     }
 
     /// Graysense is closing: save everything, queue unread conversations, stop the runtime.
@@ -1403,6 +1405,7 @@ impl Core {
         self.memory.lock().save_if_dirty();
         self.session_index.save_if_dirty();
         self.settings.save();
+        self.sync_save_if_due();
         self.terminals.kill_all();
         self.backend.shutdown(&self.rt);
         // Last, so the installer (which waits for this process to exit) starts after cleanup.
@@ -1553,6 +1556,9 @@ impl Core {
 
     /// Everything that changed since the last flush.
     fn flush(&mut self) -> Outbox {
+        for p in settings::take_file_problems() {
+            self.toast_with(Level::Warn, p.text, Some(("Show file".into(), json!({ "type": "revealPath", "path": p.path.display().to_string() }))));
+        }
         let mut u = UiUpdate::default();
         let app = self.app_dto();
         let s = sig(&app);
@@ -1609,7 +1615,9 @@ impl Core {
             u.stats = Some(self.stats_dto());
         }
         u.activity = std::mem::take(&mut self.activity_new);
-        u.toasts = std::mem::take(&mut self.toasts_new);
+        if self.ui_connected {
+            u.toasts = std::mem::take(&mut self.toasts_new);
+        }
 
         let mut out = Outbox { app_replies: std::mem::take(&mut self.app_replies), attention: std::mem::take(&mut self.attention) && !self.window_focused.load(Ordering::Relaxed), quit: self.quit, ..Default::default() };
         let title = match self.focused.and_then(|id| self.bays.iter().find(|b| b.id == id)) {
@@ -1648,8 +1656,10 @@ impl Core {
             update: Some(self.updater.status()),
             stats: Some(self.stats_dto()),
             activity: self.activity.iter().rev().cloned().collect(),
-            toasts: Vec::new(),
+            // Toasts raised before the window was listening (a file that couldn't be read…).
+            toasts: std::mem::take(&mut self.toasts_new),
         };
+        self.ui_connected = true;
         (pending, u)
     }
 }

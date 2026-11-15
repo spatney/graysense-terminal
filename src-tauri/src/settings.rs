@@ -154,11 +154,11 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        read_json(&Self::path()).unwrap_or_default()
+        read_json_backed(&Self::path()).unwrap_or_default()
     }
 
-    pub fn save(&self) {
-        write_json(&Self::path(), self);
+    pub fn save(&self) -> bool {
+        write_json_backed(&Self::path(), self).is_ok()
     }
 
     pub fn push_recent_dir(&mut self, dir: &Path) {
@@ -405,24 +405,182 @@ fn parse_panel(s: &str) -> Option<Option<SidePanel>> {
     [SidePanel::Missions, SidePanel::Sessions, SidePanel::Memory, SidePanel::Mcp, SidePanel::Plugins, SidePanel::Settings].into_iter().find(|p| panel_key(*p) == s).map(Some)
 }
 
-pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
-    let text = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&text) {
-        Ok(v) => Some(v),
-        Err(err) => {
-            tracing::warn!("failed to parse {}: {err}", path.display());
-            None
+// ------------------------------------------------------------------ state files
+
+/// A state file that couldn't be loaded or saved, for the user to hear about.
+pub struct FileProblem {
+    pub text: String,
+    /// The file to show (a damaged one is shown where it was moved aside).
+    pub path: PathBuf,
+}
+
+static FILE_PROBLEMS: std::sync::Mutex<Vec<FileProblem>> = std::sync::Mutex::new(Vec::new());
+/// Files that are there but couldn't be read (nor moved aside): never written over this run.
+static PROTECTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// Files whose last save failed (so a failure that persists is reported once).
+static FAILING: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// A backup is refreshed when it's older than this, so a damaged file loses little.
+const BACKUP_EVERY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+fn locked<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Problems found reading or saving state files since the last call.
+pub fn take_file_problems() -> Vec<FileProblem> {
+    std::mem::take(&mut *locked(&FILE_PROBLEMS))
+}
+
+fn report(text: String, path: PathBuf) {
+    tracing::warn!("{text}");
+    locked(&FILE_PROBLEMS).push(FileProblem { text, path });
+}
+
+fn is_protected(path: &Path) -> bool {
+    locked(&PROTECTED).iter().any(|p| p == path)
+}
+
+/// What a state file holds, for messages ("Your memories and notes couldn't be read").
+fn file_label(path: &Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    match name.as_str() {
+        "settings.json" => "Your settings".into(),
+        "memory.json" => "Your memories and notes".into(),
+        "missions.json" => "Your missions".into(),
+        "sessions.json" => "The list of sessions".into(),
+        "workspace.json" => "The sessions and terminals that were open".into(),
+        "sync.json" => "The sync setup".into(),
+        "memory-queue.json" => "Conversations waiting to be read for memories".into(),
+        _ => name,
+    }
+}
+
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// Another program (an antivirus, a sync client) can hold a file for a moment: try a few times.
+fn retrying<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut tries = 0;
+    loop {
+        match op() {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && tries < 3 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25 * tries));
+            }
+            r => return r,
         }
     }
 }
 
-/// Atomic-ish write: write to a temp file then rename over the target.
-pub fn write_json<T: Serialize>(path: &Path, value: &T) {
-    let Ok(text) = serde_json::to_string_pretty(value) else { return };
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, text).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+fn parse<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> serde_json::Result<T> {
+    // Notepad and other editors can save a byte order mark, which JSON doesn't allow.
+    serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
+}
+
+/// Read a JSON state file; a missing one is `None`. One that's there but can't be used is never
+/// lost: a damaged file is moved aside (`memory.corrupt-<time>.json`), one that can't be read is
+/// never written over this run, and the user hears about it (see [`take_file_problems`]).
+pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
+    load_json(path, false)
+}
+
+/// [`read_json`] for a file saved with [`write_json_backed`]: a damaged file falls back on its backup.
+pub fn read_json_backed<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
+    load_json(path, true)
+}
+
+fn load_json<T: for<'de> Deserialize<'de>>(path: &Path, backed: bool) -> Option<T> {
+    let label = file_label(path);
+    let backup = || if backed { std::fs::read(backup_path(path)).ok().and_then(|b| parse::<T>(&b).ok()) } else { None };
+    let bytes = match retrying(|| std::fs::read(path)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            locked(&PROTECTED).push(path.to_owned());
+            let restored = backup();
+            let then = if restored.is_some() { "Graysense is using its backup for now, and" } else { "Graysense" };
+            report(format!("{label} couldn't be read ({e}). {then} won't save over the file until it restarts."), path.to_owned());
+            return restored;
+        }
+    };
+    let err = match parse(&bytes) {
+        Ok(v) => return Some(v),
+        Err(e) => e,
+    };
+    tracing::warn!("failed to parse {}: {err}", path.display());
+    let restored = backup();
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let aside = path.with_file_name(format!("{stem}.corrupt-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    let start = if restored.is_some() { "Graysense restored its last backup" } else { "Graysense started fresh" };
+    if std::fs::rename(path, &aside).is_ok() {
+        let kept = aside.file_name().unwrap_or_default().to_string_lossy().to_string();
+        report(format!("{label} couldn't be read: the file is damaged. {start} and kept the damaged file as {kept}."), aside);
+    } else {
+        locked(&PROTECTED).push(path.to_owned());
+        report(format!("{label} couldn't be read: the file is damaged. {start} and won't save over the file until it restarts."), path.to_owned());
     }
+    restored
+}
+
+/// Save a state file so it's never half-written: write a temp file, flush it to the disk, then
+/// replace the old one. A failure is reported once (until a save works again).
+pub fn write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    if is_protected(path) {
+        return Err(std::io::Error::other(format!("{} couldn't be read, so it's left as it is", path.display())));
+    }
+    let result = write_now(path, value);
+    let mut failing = locked(&FAILING);
+    let known = failing.iter().position(|p| p == path);
+    match (&result, known) {
+        (Ok(()), Some(i)) => {
+            failing.swap_remove(i);
+        }
+        (Err(e), None) => {
+            failing.push(path.to_owned());
+            drop(failing);
+            report(format!("{} couldn't be saved ({e}). Graysense keeps trying.", file_label(path)), path.to_owned());
+        }
+        _ => {}
+    }
+    result
+}
+
+fn write_now<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    use std::io::Write;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let text = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let tmp = path.with_file_name(name);
+    let written = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&text)?;
+        file.sync_all()?;
+        drop(file);
+        retrying(|| std::fs::rename(&tmp, path))
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// [`write_json`], keeping a backup of the file (refreshed now and then) for
+/// [`read_json_backed`] to fall back on.
+pub fn write_json_backed<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    let bak = backup_path(path);
+    let stale = std::fs::metadata(&bak).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_none_or(|age| age > BACKUP_EVERY);
+    if stale && !is_protected(path) && path.exists() {
+        let _ = std::fs::copy(path, &bak);
+    }
+    write_json(path, value)
 }
 
 /// `path` with the home folder shortened to "~" (e.g. "~\code\app").
@@ -502,5 +660,68 @@ mod tests {
         assert_eq!(shorten_home(Path::new("C:/Users/Me"), home), "~");
         assert_eq!(shorten_home(Path::new(r"C:\Users\Meg\x"), home), r"C:\Users\Meg\x");
         assert_eq!(shorten_home(Path::new(r"C:\Users\Mé\x"), home), r"C:\Users\Mé\x");
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gs-state-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn reported(path: &Path) -> bool {
+        locked(&FILE_PROBLEMS).iter().any(|p| p.path.parent() == path.parent())
+    }
+
+    #[test]
+    fn a_damaged_file_is_kept_aside_and_its_backup_restores_it() {
+        let dir = scratch("damaged");
+        let path = dir.join("memory.json");
+        write_json_backed(&path, &json!({ "n": 1 })).unwrap();
+        // The first save had nothing to back up; this one keeps the first.
+        write_json_backed(&path, &json!({ "n": 2 })).unwrap();
+        assert_eq!(read_json_backed::<Value>(&path), Some(json!({ "n": 2 })));
+        std::fs::write(&path, "{ \"n\": 2, trunc").unwrap();
+
+        assert_eq!(read_json_backed::<Value>(&path), Some(json!({ "n": 1 })));
+        let aside: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.starts_with("memory.corrupt-")).collect();
+        assert_eq!(aside.len(), 1, "the damaged file is kept");
+        assert_eq!(std::fs::read_to_string(dir.join(&aside[0])).unwrap(), "{ \"n\": 2, trunc");
+        assert!(reported(&path));
+        // Without a backup it starts fresh, and the damaged file is still kept.
+        let other = dir.join("missions.json");
+        std::fs::write(&other, "not json").unwrap();
+        assert_eq!(read_json::<Value>(&other), None);
+        assert!(!other.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_file_is_not_a_problem_and_a_byte_order_mark_is_fine() {
+        let dir = scratch("missing");
+        assert_eq!(read_json::<Value>(&dir.join("settings.json")), None);
+        assert!(!reported(&dir.join("settings.json")));
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"\xEF\xBB\xBF{\"zoom\": 1.5}").unwrap();
+        assert_eq!(read_json::<Value>(&path), Some(json!({ "zoom": 1.5 })));
+        // Saves leave no temp files behind.
+        write_json(&path, &json!({ "zoom": 2 })).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_that_cannot_be_read_is_never_written_over() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = scratch("locked");
+        let path = dir.join("sessions.json");
+        std::fs::write(&path, "[\"precious\"]").unwrap();
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert_eq!(read_json::<Value>(&path), None);
+        drop(held);
+        assert!(reported(&path));
+        assert!(write_json(&path, &json!([])).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\"precious\"]");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

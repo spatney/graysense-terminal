@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::BayId;
-use crate::settings::{config_dir, read_json, write_json};
+use crate::settings::{config_dir, read_json_backed, write_json_backed};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
@@ -78,17 +78,24 @@ impl MissionBoard {
 
     /// The board kept in `path`.
     pub fn load_from(path: PathBuf) -> Self {
-        let stored: Stored = read_json(&path).unwrap_or_default();
+        let stored: Stored = read_json_backed(&path).unwrap_or_default();
         let next_id = stored.next_id.max(stored.missions.iter().map(|m| m.id + 1).max().unwrap_or(1));
         MissionBoard { missions: stored.missions, next_id, dirty: false, path }
     }
 
+    /// Save if anything changed. A save that fails stays due (and is tried again).
     pub fn save_if_dirty(&mut self) {
         if self.dirty {
             let stored = Stored { missions: self.missions.clone(), next_id: self.next_id };
-            write_json(&self.path, &stored);
-            self.dirty = false;
+            if write_json_backed(&self.path, &stored).is_ok() {
+                self.dirty = false;
+            }
         }
+    }
+
+    /// Changes not on the disk yet.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     /// Give every mission a uid of its own (older ones have none). Returns whether any changed.

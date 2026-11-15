@@ -40,8 +40,7 @@ impl SessionIndex {
     }
 
     pub fn save_if_dirty(&mut self) {
-        if self.dirty {
-            write_json(&Self::path(), &self.items);
+        if self.dirty && write_json(&Self::path(), &self.items).is_ok() {
             self.dirty = false;
         }
     }

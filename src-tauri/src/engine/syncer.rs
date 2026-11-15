@@ -161,6 +161,8 @@ pub struct Syncer {
     next_poll: Instant,
     backoff: Option<Instant>,
     next_job: u64,
+    /// The sync state changed but couldn't be saved yet (see `sync_save`).
+    save_due: bool,
 }
 
 impl Syncer {
@@ -185,6 +187,7 @@ impl Syncer {
             next_poll: now + POLL,
             backoff: None,
             next_job: 1,
+            save_due: false,
         }
     }
 }
@@ -258,7 +261,19 @@ impl Core {
     }
 
     fn sync_save(&mut self) {
-        sync::save(&self.sync.config, &self.sync.state);
+        // Never ahead of the memories and missions it describes: if Graysense stopped in between,
+        // what the base says was merged would read as deleted here. Until they're saved, it waits.
+        self.memory.lock().save_if_dirty();
+        self.missions.save_if_dirty();
+        let saved = !self.memory.lock().is_dirty() && !self.missions.is_dirty() && sync::save(&self.sync.config, &self.sync.state);
+        self.sync.save_due = !saved;
+    }
+
+    /// Save the sync state if an earlier save had to wait.
+    pub(super) fn sync_save_if_due(&mut self) {
+        if self.sync.save_due {
+            self.sync_save();
+        }
     }
 
     // ------------------------------------------------------------------ what the user asks for

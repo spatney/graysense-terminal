@@ -158,9 +158,8 @@ pub fn load() -> (Config, State) {
     (file.config, file.state)
 }
 
-pub fn save(config: &Config, state: &State) {
-    let _ = std::fs::create_dir_all(dir());
-    write_json(&file_path(), &File { version: 1, config: config.clone(), state: state.clone() });
+pub fn save(config: &Config, state: &State) -> bool {
+    write_json(&file_path(), &File { version: 1, config: config.clone(), state: state.clone() }).is_ok()
 }
 
 /// What this PC is called in commits and in what the AI reads ("DESKTOP-4F2K").

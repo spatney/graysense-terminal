@@ -77,7 +77,7 @@ impl Core {
             }
         }
         if !queue.is_empty() {
-            settings::write_json(&learn_queue_path(), &queue);
+            let _ = settings::write_json(&learn_queue_path(), &queue);
         }
     }
 

@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::settings::{config_dir, read_json, write_json};
+use crate::settings::{config_dir, read_json_backed, write_json_backed};
 
 /// Live switches mirrored from settings, so turning memory (or sharing) off takes effect in
 /// agents that are already running, not only in new ones.
@@ -666,20 +666,27 @@ impl MemoryStore {
 
     /// The store kept in `path`.
     pub fn load_from(path: PathBuf) -> Self {
-        let disk: Disk = read_json(&path).unwrap_or_default();
+        let disk: Disk = read_json_backed(&path).unwrap_or_default();
         let next_id = disk.next_id.max(disk.memories.iter().map(|m| m.id).max().unwrap_or(0) + 1);
         let mut s = MemoryStore { memories: disk.memories, approvals: disk.approvals, next_id, path, dirty: false, revision: 0 };
         s.compact();
         s
     }
 
+    /// Save if anything changed. A save that fails stays due (and is tried again).
     pub fn save_if_dirty(&mut self) {
         if !self.dirty {
             return;
         }
         let disk = Disk { version: 1, next_id: self.next_id, memories: self.memories.clone(), approvals: self.approvals.clone() };
-        write_json(&self.path, &disk);
-        self.dirty = false;
+        if write_json_backed(&self.path, &disk).is_ok() {
+            self.dirty = false;
+        }
+    }
+
+    /// Changes not on the disk yet.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     pub(crate) fn touch(&mut self) {
