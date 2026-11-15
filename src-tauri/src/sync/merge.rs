@@ -286,6 +286,9 @@ fn combine(winner: &Item, loser: &Item) -> Item {
     out.sources.drain(..keep);
     let have: HashSet<String> = out.attachments.iter().map(ItemAttachment::ident).collect();
     out.attachments.extend(loser.attachments.iter().filter(|a| !have.contains(&a.ident())).cloned());
+    if out.keywords.is_empty() {
+        out.keywords = loser.keywords.clone();
+    }
     out
 }
 

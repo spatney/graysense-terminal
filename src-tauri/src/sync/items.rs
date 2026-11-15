@@ -155,6 +155,9 @@ pub struct Item {
     pub sources: Vec<Source>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<Revision>,
+    /// Search words learning gave it (see [`Memory::keywords`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
 }
 
 fn active() -> String {
@@ -206,6 +209,7 @@ impl Item {
             attachments: m.attachments.iter().map(ItemAttachment::from_local).collect(),
             sources: m.sources.iter().rev().take(MAX_SOURCES).rev().filter_map(shareable_source).collect(),
             history: m.history.iter().rev().take(MAX_HISTORY).rev().filter(|r| !memory::looks_secret(&r.text)).cloned().collect(),
+            keywords: m.keywords.clone(),
         }
         .normalized()
         .ok()
@@ -303,6 +307,7 @@ impl Item {
             .map(|r| Revision { text: tidy(&r.text), at: r.at, why: r.why.chars().filter(|c| !c.is_control()).take(80).collect() })
             .filter(|r| !r.text.is_empty() && !memory::looks_secret(&r.text))
             .collect();
+        self.keywords = memory::clean_keywords(&self.keywords, &self.text);
         Ok(self)
     }
 }
@@ -531,6 +536,7 @@ pub(crate) mod tests {
             votes: 0,
             opens: 0,
             last_opened: None,
+            keywords: Vec::new(),
         }
     }
 
@@ -550,6 +556,7 @@ pub(crate) mod tests {
             attachments: Vec::new(),
             sources: Vec::new(),
             history: Vec::new(),
+            keywords: Vec::new(),
         }
     }
 

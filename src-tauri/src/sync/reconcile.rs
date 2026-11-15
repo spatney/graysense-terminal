@@ -184,7 +184,7 @@ pub fn parse(content: &str, allowed: &HashSet<MemoryId>, protected: &dyn Fn(Memo
         }
         used.extend(all);
         if !text.is_empty() {
-            ops.push(Op::Update { id: keep, text, confidence, evidence: reason.clone() });
+            ops.push(Op::Update { id: keep, text, confidence, evidence: reason.clone(), keywords: Vec::new() });
         }
         let why = reason.map(|r| format!("Merged into another memory: {r}")).unwrap_or_else(|| "Merged into another memory".to_owned());
         ops.extend(drops.into_iter().map(|id| Op::Delete { id, reason: Some(why.clone()) }));

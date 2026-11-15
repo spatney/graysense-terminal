@@ -59,6 +59,7 @@ fn to_memory(id: memory::MemoryId, item: &Item, projects: &Projects) -> Memory {
         votes: item.votes,
         opens: 0,
         last_opened: None,
+        keywords: item.keywords.clone(),
     }
 }
 
@@ -190,6 +191,10 @@ pub fn memories(store: &mut MemoryStore, changes: &[Change], projects: &Projects
                         m.updated = item.updated;
                         m.sources = item.sources.clone();
                         m.history = item.history.clone();
+                        // A PC from before search words were learned sends none: keep this PC's.
+                        if !item.keywords.is_empty() {
+                            m.keywords = item.keywords.clone();
+                        }
                         // Whatever it proposed was about the words it had.
                         m.proposal = None;
                         sync_attachments(m, item, repo, &dir, options.files, budget);
@@ -454,6 +459,7 @@ mod tests {
         store.mark_used(&[id]);
         store.mark_used(&[id]);
         store.get_mut(id).unwrap().proposal = Some(memory::Proposal::Delete);
+        store.get_mut(id).unwrap().keywords = vec!["package manager".into()];
         store.ensure_uids();
         let uid = store.get(id).unwrap().uid.clone();
         let mut changed = item(&uid, "preference", "Prefers yarn");
@@ -469,6 +475,8 @@ mod tests {
         // Its use here is this PC's own business; the proposal was about the old words.
         assert_eq!(m.uses, 2);
         assert!(m.proposal.is_none());
+        // A PC that doesn't learn search words yet doesn't wipe this one's.
+        assert_eq!(m.keywords, ["package manager"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

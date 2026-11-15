@@ -199,6 +199,10 @@ pub struct Memory {
     pub opens: u32,
     #[serde(default)]
     pub last_opened: Option<i64>,
+    /// Search words learning gave it that its text doesn't use, so recall finds it by other
+    /// names ("bundler" for a memory about Vite). Only ever matched, never shown to agents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,11 +308,14 @@ impl Memory {
 
     /// Text that search matches for a note: what it says, plus its files' names and links.
     pub fn search_text(&self) -> String {
-        if self.attachments.is_empty() {
-            return self.text.clone();
-        }
-        let names: Vec<&str> = self.attachments.iter().flat_map(|a| [a.name.as_str(), a.target.as_str()]).collect();
-        format!("{} {}", self.text, names.join(" "))
+        let names = self.attachments.iter().flat_map(|a| [a.name.as_str(), a.target.as_str()]);
+        std::iter::once(self.text.as_str()).chain(names).chain(self.keywords.iter().map(String::as_str)).collect::<Vec<_>>().join(" ")
+    }
+
+    /// Text that recall matches when choosing what to give an agent: what it says, plus its
+    /// search words.
+    pub fn recall_text(&self) -> std::borrow::Cow<'_, str> {
+        if self.keywords.is_empty() { self.text.as_str().into() } else { format!("{} {}", self.text, self.keywords.join(" ")).into() }
     }
 }
 
@@ -326,8 +333,8 @@ pub struct ApprovalStat {
 /// One change produced by the curator (or a heuristic), before policy is applied.
 #[derive(Clone, Debug)]
 pub enum Op {
-    Add { kind: Kind, scope: Scope, text: String, confidence: f32, evidence: Option<String> },
-    Update { id: MemoryId, text: String, confidence: f32, evidence: Option<String> },
+    Add { kind: Kind, scope: Scope, text: String, confidence: f32, evidence: Option<String>, keywords: Vec<String> },
+    Update { id: MemoryId, text: String, confidence: f32, evidence: Option<String>, keywords: Vec<String> },
     Delete { id: MemoryId, reason: Option<String> },
     Reinforce { id: MemoryId },
     Episode { scope: Scope, text: String },
@@ -425,6 +432,27 @@ pub fn tokens(text: &str) -> Vec<String> {
         .filter(|w| w.len() > 1 && !STOP.contains(w))
         .map(stem)
         .collect()
+}
+
+/// Search words as they're kept: at most six short lowercase words or phrases, none that looks
+/// like a secret and none that only repeats what `text` already says.
+pub fn clean_keywords<S: AsRef<str>>(raw: &[S], text: &str) -> Vec<String> {
+    let said: HashSet<String> = tokens(text).into_iter().collect();
+    let mut out: Vec<String> = Vec::new();
+    for k in raw {
+        let k = k.as_ref().split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        if k.is_empty() || k.chars().count() > 32 || k.chars().any(char::is_control) || looks_secret(&k) || out.contains(&k) {
+            continue;
+        }
+        if tokens(&k).iter().all(|w| said.contains(w)) {
+            continue;
+        }
+        out.push(k);
+        if out.len() == 6 {
+            break;
+        }
+    }
+    out
 }
 
 pub(crate) fn jaccard(a: &str, b: &str) -> f32 {
@@ -842,6 +870,7 @@ impl MemoryStore {
             votes: 0,
             opens: 0,
             last_opened: None,
+            keywords: Vec::new(),
         });
         self.touch();
         Some(id)
@@ -1028,6 +1057,7 @@ impl MemoryStore {
             votes: 0,
             opens: 0,
             last_opened: None,
+            keywords: Vec::new(),
         };
         let mut all_links: Vec<String> = links.to_vec();
         for l in links_in(&note.text) {
@@ -1108,7 +1138,7 @@ impl MemoryStore {
         let mut out = Outcome::default();
         for op in ops {
             match op {
-                Op::Add { kind, scope, text, confidence, evidence } => {
+                Op::Add { kind, scope, text, confidence, evidence, keywords } => {
                     if confidence < 0.5 || self.rejected(&clean(&text)) {
                         continue;
                     }
@@ -1118,16 +1148,20 @@ impl MemoryStore {
                     let auto = auto_accept.is_some_and(|t| confidence >= bar(t));
                     let src = Source { quote: evidence.or(source.quote.clone()), ..source.clone() };
                     let was_new = self.find_duplicate(&scope, kind, &clean(&text)).is_none();
-                    if let Some(id) = self.insert(kind, scope, &text, Origin::Learned, if auto { State::Active } else { State::Pending }, confidence, Some(src))
-                        && was_new {
+                    if let Some(id) = self.insert(kind, scope, &text, Origin::Learned, if auto { State::Active } else { State::Pending }, confidence, Some(src)) {
+                        if let Some(m) = self.get_mut(id).filter(|m| m.keywords.is_empty()) {
+                            m.keywords = clean_keywords(&keywords, &m.text);
+                        }
+                        if was_new {
                             if auto {
                                 out.saved.push((id, clean(&text)));
                             } else {
                                 out.suggested += 1;
                             }
                         }
+                    }
                 }
-                Op::Update { id, text, confidence, evidence } => {
+                Op::Update { id, text, confidence, evidence, keywords } => {
                     let text = clean(&text);
                     if text.is_empty() || looks_secret(&text) {
                         continue;
@@ -1136,6 +1170,11 @@ impl MemoryStore {
                     let Some(m) = self.get_mut(id) else { continue };
                     if m.state == State::Archived || m.text == text {
                         continue;
+                    }
+                    // Words to find it by stay right for a reworded proposal too: it's still about the same thing.
+                    let keywords = clean_keywords(&keywords, &text);
+                    if !keywords.is_empty() {
+                        m.keywords = keywords;
                     }
                     if m.is_user_owned() || m.pinned || !auto {
                         m.proposal = Some(Proposal::Update(text));
@@ -1272,7 +1311,8 @@ impl MemoryStore {
             .filter(|m| m.state == State::Active && m.kind != Kind::Rule && m.kind != Kind::Episode && !skip.contains(&m.id) && Self::in_scope(m, project) && (m.pinned || !m.is_stale(t)))
             .filter(|m| !prompt.is_some_and(|p| Self::said_in(m, p, t)))
             .collect();
-        let relevance = prompt.map(|p| bm25(p, &pool.iter().map(|m| m.text.as_str()).collect::<Vec<_>>())).unwrap_or_else(|| vec![0.0; pool.len()]);
+        let texts: Vec<_> = pool.iter().map(|m| m.recall_text()).collect();
+        let relevance = prompt.map(|p| bm25(p, &texts.iter().map(|t| t.as_ref()).collect::<Vec<_>>())).unwrap_or_else(|| vec![0.0; pool.len()]);
         let max_rel = relevance.iter().copied().fold(0.0f32, f32::max).max(1e-6);
         let mut scored: Vec<(f32, &Memory)> = pool
             .iter()
@@ -1370,7 +1410,8 @@ impl MemoryStore {
             .filter(|m| m.state == State::Active && m.kind != Kind::Rule && !shown.contains(&m.id) && Self::in_scope(m, project) && (m.pinned || !m.is_stale(t)))
             .filter(|m| !Self::said_in(m, prompt, t))
             .collect();
-        let scores = bm25(prompt, &pool.iter().map(|m| m.text.as_str()).collect::<Vec<_>>());
+        let texts: Vec<_> = pool.iter().map(|m| m.recall_text()).collect();
+        let scores = bm25(prompt, &texts.iter().map(|t| t.as_ref()).collect::<Vec<_>>());
         let mut hits: Vec<(f32, &Memory)> = pool.into_iter().zip(scores).map(|(m, s)| (s, m)).filter(|(s, _)| *s >= 1.5).collect();
         hits.sort_by(|a, b| b.0.total_cmp(&a.0));
         hits.truncate(limit);
@@ -1398,7 +1439,8 @@ impl MemoryStore {
             .iter()
             .filter(|m| m.state != State::Archived && m.kind != Kind::Rule && m.kind != Kind::Episode && m.kind != Kind::Note && Self::in_scope(m, project))
             .collect();
-        let scores = bm25(transcript, &pool.iter().map(|m| m.text.as_str()).collect::<Vec<_>>());
+        let texts: Vec<_> = pool.iter().map(|m| m.recall_text()).collect();
+        let scores = bm25(transcript, &texts.iter().map(|t| t.as_ref()).collect::<Vec<_>>());
         let mut ranked: Vec<(f32, &Memory)> = pool.into_iter().zip(scores).map(|(m, s)| (s, m)).collect();
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.updated.cmp(&a.1.updated)));
         ranked.into_iter().take(limit).map(|(_, m)| m).collect()
@@ -1599,7 +1641,10 @@ Also write \"episode\": one sentence of at most 200 characters summarising the w
 so a future agent can pick up where this left off. Use an empty string when no real work happened (questions, small talk, acknowledgements) \
 and never mention memories or this curation.
 Every operation has every field: use id 0 for \"add\", and an empty string for any text, evidence, kind or scope that doesn't apply. \
-Use \"evidence\" for a short quote of the USER's words that supports the operation.
+Use \"evidence\" for a short quote of the USER's words that supports the operation. \
+For \"add\" and \"update\", give \"keywords\": 3 to 6 short lowercase search terms a developer might use when this memory would help \
+but that its text doesn't contain (synonyms, the tool or area it's about), e.g. [\"bundler\", \"dev server\", \"hot reload\"] for a memory about Vite. \
+Use an empty list for other operations.
 Respond only with JSON matching the schema.";
 
 /// Structured-output schema for the curator. Every object is closed and every field required
@@ -1621,9 +1666,10 @@ pub fn curator_schema() -> Value {
                         "scope": { "type": "string", "enum": ["global", "project", ""] },
                         "text": { "type": "string" },
                         "confidence": { "type": "number" },
-                        "evidence": { "type": "string" }
+                        "evidence": { "type": "string" },
+                        "keywords": { "type": "array", "items": { "type": "string" } }
                     },
-                    "required": ["op", "id", "kind", "scope", "text", "confidence", "evidence"]
+                    "required": ["op", "id", "kind", "scope", "text", "confidence", "evidence", "keywords"]
                 }
             },
             "episode": { "type": "string" }
@@ -1666,15 +1712,16 @@ pub fn parse_curator(content: &str, project: Option<&Project>) -> Vec<Op> {
         let str_of = |k: &str| o.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
         let id = o.get("id").and_then(|x| x.as_u64()).filter(|id| *id > 0);
         let conf = o.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.7) as f32;
+        let keywords: Vec<String> = o.get("keywords").and_then(|x| x.as_array()).into_iter().flatten().filter_map(|k| k.as_str()).take(12).map(str::to_owned).collect();
         match (str_of("op").as_deref(), id) {
             (Some("add"), _) => {
                 if let (Some(text), Some(kind)) = (str_of("text"), str_of("kind").as_deref().and_then(Kind::parse)) {
-                    ops.push(Op::Add { kind, scope: scope_of(o.get("scope").and_then(|x| x.as_str())), text, confidence: conf, evidence: str_of("evidence") });
+                    ops.push(Op::Add { kind, scope: scope_of(o.get("scope").and_then(|x| x.as_str())), text, confidence: conf, evidence: str_of("evidence"), keywords });
                 }
             }
             (Some("update"), Some(id)) => {
                 if let Some(text) = str_of("text") {
-                    ops.push(Op::Update { id, text, confidence: conf, evidence: str_of("evidence") });
+                    ops.push(Op::Update { id, text, confidence: conf, evidence: str_of("evidence"), keywords });
                 }
             }
             (Some("delete"), Some(id)) => ops.push(Op::Delete { id, reason: str_of("evidence") }),
@@ -1719,7 +1766,7 @@ mod tests {
     fn user_owned_memories_only_get_proposals() {
         let mut s = store();
         let id = s.insert(Kind::Preference, Scope::Global, "Prefer tabs", Origin::User, State::Active, 1.0, None).unwrap();
-        let out = s.apply(vec![Op::Update { id, text: "Prefer spaces".into(), confidence: 0.95, evidence: None }], Source::default(), Some(0.8));
+        let out = s.apply(vec![Op::Update { id, text: "Prefer spaces".into(), confidence: 0.95, evidence: None, keywords: vec![] }], Source::default(), Some(0.8));
         assert_eq!(out.suggested, 1);
         assert_eq!(s.get(id).unwrap().text, "Prefer tabs");
         s.accept(id);
@@ -1729,7 +1776,7 @@ mod tests {
     #[test]
     fn low_confidence_goes_to_inbox() {
         let mut s = store();
-        let out = s.apply(vec![Op::Add { kind: Kind::Fact, scope: Scope::Global, text: "Deploys happen on Fridays".into(), confidence: 0.7, evidence: None }], Source::default(), Some(0.85));
+        let out = s.apply(vec![Op::Add { kind: Kind::Fact, scope: Scope::Global, text: "Deploys happen on Fridays".into(), confidence: 0.7, evidence: None, keywords: vec![] }], Source::default(), Some(0.85));
         assert_eq!(out.suggested, 1);
         assert_eq!(s.memories.iter().filter(|m| m.state == State::Pending).count(), 1);
     }
@@ -1737,7 +1784,7 @@ mod tests {
     #[test]
     fn deleted_memories_are_not_relearned_until_purged() {
         let mut s = store();
-        let add = || vec![Op::Add { kind: Kind::Preference, scope: Scope::Global, text: "Prefers dark themes".into(), confidence: 0.95, evidence: None }];
+        let add = || vec![Op::Add { kind: Kind::Preference, scope: Scope::Global, text: "Prefers dark themes".into(), confidence: 0.95, evidence: None, keywords: vec![] }];
         let id = s.apply(add(), Source::default(), Some(0.85)).saved[0].0;
         s.archive(id, "deleted");
         let out = s.apply(add(), Source::default(), Some(0.85));
@@ -1753,7 +1800,7 @@ mod tests {
     #[test]
     fn a_memory_marked_wrong_is_not_relearned() {
         let mut s = store();
-        let add = || vec![Op::Add { kind: Kind::Fact, scope: Scope::Global, text: "The API listens on port 8080".into(), confidence: 0.95, evidence: None }];
+        let add = || vec![Op::Add { kind: Kind::Fact, scope: Scope::Global, text: "The API listens on port 8080".into(), confidence: 0.95, evidence: None, keywords: vec![] }];
         let id = s.apply(add(), Source::default(), Some(0.85)).saved[0].0;
         s.archive(id, "flagged");
         assert!(s.get(id).unwrap().is_flagged());
@@ -1762,6 +1809,25 @@ mod tests {
         // Undo takes the mark back (so agents aren't told it's wrong).
         s.restore(id);
         assert!(!s.get(id).unwrap().is_flagged());
+    }
+
+    #[test]
+    fn learned_search_words_let_recall_find_a_memory_by_other_names() {
+        let mut s = store();
+        for t in ["Prefers tabs over spaces", "Run cargo test before committing", "The API listens on port 8080", "Deploys happen on Fridays", "Docs live in the wiki", "CI runs on GitHub Actions", "Never force-push to main", "Release notes go in CHANGELOG.md"] {
+            s.insert(Kind::Fact, Scope::Global, t, Origin::Learned, State::Active, 0.9, None);
+        }
+        let reply = r#"{"ops":[{"op":"add","id":0,"kind":"procedure","scope":"global","text":"Start Vite with npm run dev -- --host","confidence":0.95,"evidence":"",
+            "keywords":["Bundler","dev  server","vite","hot reload","ghp_abcdefghijklmnopqrstuvwxyz0123456789","a phrase far too long to be a search word","frontend","build tool","esbuild","rollup"]}],"episode":""}"#;
+        s.apply(parse_curator(reply, None), Source::default(), Some(0.85));
+        let m = s.memories.iter().find(|m| m.text.starts_with("Start Vite")).unwrap();
+        // Lowercased, without what the text says already, secrets or long phrases, and at most six.
+        assert_eq!(m.keywords, ["bundler", "dev server", "hot reload", "frontend", "build tool", "esbuild"]);
+        let id = m.id;
+        let prompt = "the bundler's hot reload stopped working";
+        assert_eq!(s.followup_for(None, prompt, &HashSet::new(), 3).1, [id]);
+        s.get_mut(id).unwrap().keywords.clear();
+        assert!(s.followup_for(None, prompt, &HashSet::new(), 3).1.is_empty());
     }
 
     #[test]
