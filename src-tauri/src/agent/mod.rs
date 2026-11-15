@@ -420,6 +420,8 @@ pub struct AgentView {
     pub seen: HashSet<String>,
     pub tokens_in: u64,
     pub tokens_out: u64,
+    /// Premium requests the session has used, once the runtime says.
+    pub premium_cost: Option<f64>,
     pub context: Option<(i64, i64)>,
     pub tool_count: u32,
     pub turns: u32,
@@ -594,6 +596,7 @@ impl AgentView {
             seen: HashSet::new(),
             tokens_in: 0,
             tokens_out: 0,
+            premium_cost: None,
             context: None,
             tool_count: 0,
             turns: 0,

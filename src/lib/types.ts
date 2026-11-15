@@ -67,6 +67,8 @@ export interface AgentDto {
   handoff: HandoffDto | null;
   /** The session is reopened after a restart (it has a message; empty ones start afresh). */
   resumable: boolean;
+  /** Premium requests the session has used, once the runtime says. */
+  premiumCost: number | null;
 }
 
 export interface HandoffDto {
@@ -550,6 +552,17 @@ export interface AppDto {
   home: string;
   configDir: string;
   search: { building: boolean; built: boolean; sessions: number; files: number };
+  /** The user's premium allowance; null when the runtime can't say. */
+  quota: QuotaDto | null;
+}
+
+export interface QuotaDto {
+  entitlement: number;
+  used: number;
+  remainingPercent: number;
+  unlimited: boolean;
+  overage: number;
+  resetDate: string | null;
 }
 
 export interface UpdateStatus {

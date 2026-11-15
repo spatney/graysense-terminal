@@ -132,6 +132,10 @@ pub enum Cmd {
     Close { bay: BayId },
     ListModels,
     ListSessions,
+    /// Ask how much of the user's premium allowance is left.
+    Quota,
+    /// Ask what a session has cost so far, in premium requests.
+    SessionCost { bay: BayId },
     /// Name an open session: `user` names stick; otherwise only applied until the user names it.
     NameSession { bay: BayId, name: String, user: bool },
     /// Delete a session's history (its folder is left alone).
@@ -236,6 +240,35 @@ fn context_sizes(m: &github_copilot_sdk::rpc::Model) -> Vec<ContextSize> {
     ]
 }
 
+/// How much of the user's premium request allowance is left this period.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaInfo {
+    /// Requests included this period (meaningless when unlimited).
+    pub entitlement: i64,
+    pub used: i64,
+    /// 0 to 100.
+    pub remaining_percent: f64,
+    pub unlimited: bool,
+    /// Requests made beyond the allowance this period.
+    pub overage: f64,
+    /// When the allowance resets (ISO 8601).
+    pub reset_date: Option<String>,
+}
+
+/// The premium allowance from the runtime's quota snapshots (None when it has none).
+pub fn premium_quota(snapshots: &HashMap<String, github_copilot_sdk::rpc::AccountQuotaSnapshot>) -> Option<QuotaInfo> {
+    let q = snapshots.get("premium_interactions")?;
+    Some(QuotaInfo {
+        entitlement: q.entitlement_requests,
+        used: q.used_requests,
+        remaining_percent: q.remaining_percentage.clamp(0.0, 100.0),
+        unlimited: q.is_unlimited_entitlement || q.entitlement_requests < 0,
+        overage: q.overage,
+        reset_date: q.reset_date.clone().filter(|d| !d.is_empty()),
+    })
+}
+
 /// The SDK's name for a context tier Graysense offers.
 fn sdk_tier(tier: &str) -> Option<ContextTier> {
     match tier {
@@ -321,6 +354,10 @@ pub enum Evt {
     CanvasAction { bay: BayId, instance_id: String, action: String, input: Value, reply: oneshot::Sender<Result<Value, String>> },
     CanvasClosed { bay: BayId, instance_id: String },
     Models(Vec<ModelInfo>),
+    /// The user's premium allowance (None: the runtime couldn't say).
+    Quota(Option<QuotaInfo>),
+    /// What a session has cost so far, in premium requests.
+    SessionCost { bay: BayId, cost: f64 },
     Sessions(Vec<SessionInfo>),
     McpServers { servers: Result<Vec<McpServerInfo>, String>, live_bay: Option<BayId> },
     McpTools { server: String, tools: Result<Vec<McpToolInfo>, String> },
@@ -404,7 +441,7 @@ fn needs_client(cmd: &Cmd) -> bool {
 fn bay_of(cmd: &Cmd) -> Option<BayId> {
     match cmd {
         Cmd::Send { bay, .. } | Cmd::CarryOn { bay } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::SetCwd { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
-        Cmd::RewindPreview { bay, .. } | Cmd::Rewind { bay, .. } => Some(*bay),
+        Cmd::RewindPreview { bay, .. } | Cmd::Rewind { bay, .. } | Cmd::SessionCost { bay } => Some(*bay),
         Cmd::App(AppCmd::CallTool { bay, .. }) | Cmd::App(AppCmd::ReadResource { bay, .. }) => Some(*bay),
         Cmd::Mcp(McpCmd::Tools { bay, .. }) | Cmd::Mcp(McpCmd::Restart { bay, .. }) | Cmd::Mcp(McpCmd::Stop { bay, .. }) | Cmd::Mcp(McpCmd::Start { bay, .. }) => Some(*bay),
         _ => None,
@@ -451,7 +488,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     ui.send(Evt::RewindPreview { bay, event_id, result: Err(OFFLINE.into()) });
                 } else if let Cmd::Rewind { event_id, .. } = cmd {
                     ui.send(Evt::Rewound { bay, event_id, result: Err(OFFLINE.into()) });
-                } else if !matches!(cmd, Cmd::Close { .. }) {
+                } else if !matches!(cmd, Cmd::Close { .. } | Cmd::SessionCost { .. }) {
                     ui.send(Evt::Notice { bay, error: true, text: OFFLINE.into() });
                 }
                 continue;
@@ -677,6 +714,29 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                         ui.send(Evt::Toast { error: true, text: format!("Couldn't delete the session: {e}") });
                     }
                     let _ = self_tx.send(Cmd::ListSessions);
+                });
+            }
+            Cmd::Quota => {
+                let c = client.clone().unwrap();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    match c.rpc().account().get_quota().await {
+                        Ok(r) => ui.send(Evt::Quota(premium_quota(&r.quota_snapshots))),
+                        Err(e) => {
+                            tracing::warn!("account.getQuota failed: {e}");
+                            ui.send(Evt::Quota(None));
+                        }
+                    }
+                });
+            }
+            Cmd::SessionCost { bay } => {
+                let Some(s) = sessions.get(&bay).cloned() else { continue };
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    match s.rpc().usage().get_metrics().await {
+                        Ok(m) => ui.send(Evt::SessionCost { bay, cost: m.total_premium_request_cost }),
+                        Err(e) => tracing::debug!("session.usage.getMetrics failed: {e}"),
+                    }
                 });
             }
             Cmd::ListModels => {
@@ -2028,4 +2088,34 @@ async fn one_shot(client: &Client, model: Option<String>, system: &str, schema: 
     let _ = client.delete_session(&id).await;
     let event = result.map_err(|e| e.to_string())?.ok_or_else(|| "the model returned nothing".to_owned())?;
     Ok(event.data.get("content").and_then(|v| v.as_str()).unwrap_or_default().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use github_copilot_sdk::rpc::AccountQuotaSnapshot;
+
+    fn snapshots(q: AccountQuotaSnapshot) -> HashMap<String, AccountQuotaSnapshot> {
+        HashMap::from([("premium_interactions".to_owned(), q)])
+    }
+
+    #[test]
+    fn premium_quota_reads_the_premium_snapshot() {
+        let q = AccountQuotaSnapshot { entitlement_requests: 300, used_requests: 120, remaining_percentage: 60.0, reset_date: Some(String::new()), ..Default::default() };
+        let info = premium_quota(&snapshots(q)).unwrap();
+        assert_eq!((info.entitlement, info.used, info.unlimited, info.reset_date), (300, 120, false, None));
+        assert!(premium_quota(&HashMap::new()).is_none());
+        let chat = HashMap::from([("chat".to_owned(), AccountQuotaSnapshot::default())]);
+        assert!(premium_quota(&chat).is_none());
+    }
+
+    #[test]
+    fn premium_quota_spots_unlimited_plans() {
+        let flagged = AccountQuotaSnapshot { is_unlimited_entitlement: true, ..Default::default() };
+        let minus_one = AccountQuotaSnapshot { entitlement_requests: -1, remaining_percentage: 140.0, ..Default::default() };
+        assert!(premium_quota(&snapshots(flagged)).unwrap().unlimited);
+        let info = premium_quota(&snapshots(minus_one)).unwrap();
+        assert!(info.unlimited);
+        assert_eq!(info.remaining_percent, 100.0);
+    }
 }

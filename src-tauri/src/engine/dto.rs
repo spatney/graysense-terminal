@@ -637,6 +637,8 @@ pub struct AgentDto {
     pub handoff: Option<HandoffDto>,
     /// The session is reopened after a restart (it has a message; empty ones start afresh).
     pub resumable: bool,
+    /// Premium requests the session has used, once the runtime says.
+    pub premium_cost: Option<f64>,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -763,6 +765,7 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         rewind: rewind_dto(v),
         handoff: v.handoff.as_ref().map(|h| HandoffDto { summary: h.summary.clone(), next: h.next.clone(), at: h.at * 1000 }),
         resumable: v.session_id.is_some() && v.has_history,
+        premium_cost: v.premium_cost,
     }
 }
 
@@ -1209,6 +1212,8 @@ pub struct AppDto {
     pub home: String,
     pub config_dir: String,
     pub search: SearchStatusDto,
+    /// The user's premium allowance (None: unknown, not zero).
+    pub quota: Option<crate::agent::backend::QuotaInfo>,
 }
 
 #[derive(Serialize, Clone, PartialEq)]

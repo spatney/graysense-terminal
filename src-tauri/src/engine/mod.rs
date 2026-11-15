@@ -319,6 +319,12 @@ pub struct Core {
     courier: Courier,
     /// See [`Workspace::runtime_model`].
     runtime_model: Option<String>,
+    /// The user's premium allowance, when the runtime says.
+    quota: Option<crate::agent::backend::QuotaInfo>,
+    /// When the allowance was last asked for.
+    quota_at: Option<Instant>,
+    /// A turn ended since: ask again soon.
+    quota_stale: bool,
 }
 
 /// How long nothing may change before a flush stops waiting to batch more changes.
@@ -382,6 +388,9 @@ impl Core {
             terminals,
             courier,
             runtime_model: settings::read_json::<Workspace>(&Self::workspace_path()).and_then(|w| w.runtime_model),
+            quota: None,
+            quota_at: None,
+            quota_stale: false,
         };
         crate::memory::set_switches(core.settings.memory.enabled, core.settings.memory.inject);
         core.note_new_version();
@@ -1081,6 +1090,8 @@ impl Core {
                 if matches!(state, ClientState::Ready) {
                     self.backend.send(Cmd::ListModels);
                     self.backend.send(Cmd::ListSessions);
+                    self.backend.send(Cmd::Quota);
+                    self.quota_at = Some(Instant::now());
                 }
                 self.client = state;
             }
@@ -1207,6 +1218,8 @@ impl Core {
                 if let Some(carry) = v.carry_on.take() {
                     self.carry_on(bay, carry);
                 }
+                // What the session cost before it was closed.
+                self.backend.send(Cmd::SessionCost { bay });
             }
             Evt::Notice { bay, error, text } => {
                 if let Some(v) = self.agent_mut(bay) {
@@ -1251,6 +1264,12 @@ impl Core {
                 self.models = m;
                 if first {
                     self.resume_learn_queue();
+                }
+            }
+            Evt::Quota(q) => self.quota = q,
+            Evt::SessionCost { bay, cost } => {
+                if let Some(v) = self.agent_mut(bay) {
+                    v.premium_cost = Some(cost);
                 }
             }
             Evt::Sessions(s) => {
@@ -1360,6 +1379,8 @@ impl Core {
                     if let Some(v) = self.agent_mut(bay) {
                         v.learn_due = Some(Instant::now() + learn::LEARN_DELAY);
                     }
+                    self.backend.send(Cmd::SessionCost { bay });
+                    self.quota_stale = true;
                     let focused = self.focused == Some(bay) && self.window_focused.load(Ordering::Relaxed);
                     if !focused {
                         let title = self.agent(bay).map(|v| v.display_title()).unwrap_or_default();
@@ -1431,9 +1452,23 @@ impl Core {
         self.memory_tick();
         self.sync_tick();
         self.tidy_tick();
+        self.quota_tick();
         if self.last_save.elapsed() > Duration::from_secs(3) {
             self.save();
             self.last_save = Instant::now();
+        }
+    }
+
+    /// Ask for the premium allowance every 10 minutes, and a minute after turns end.
+    fn quota_tick(&mut self) {
+        if !matches!(self.client, ClientState::Ready) {
+            return;
+        }
+        let since = self.quota_at.map_or(Duration::MAX, |t| t.elapsed());
+        if since >= Duration::from_secs(600) || (self.quota_stale && since >= Duration::from_secs(60)) {
+            self.quota_at = Some(Instant::now());
+            self.quota_stale = false;
+            self.backend.send(Cmd::Quota);
         }
     }
 
@@ -1487,6 +1522,7 @@ impl Core {
             home: dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default(),
             config_dir: settings::config_dir().display().to_string(),
             search: SearchStatusDto { building: self.search.rx.is_some(), built: self.search.built.is_some(), sessions: stats.sessions, files: stats.files },
+            quota: self.quota.clone(),
         }
     }
 

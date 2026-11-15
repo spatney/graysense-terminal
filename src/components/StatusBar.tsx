@@ -1,6 +1,8 @@
 import { act, restartToUpdate, setSide } from '../lib/api';
 import { agoLong, bytes, human, modelLabel } from '../lib/format';
+import { quotaStatus } from '../lib/quota';
 import { focusComposer, openOverlay, useUi } from '../lib/store';
+import type { QuotaDto } from '../lib/types';
 import { showSyncSettings } from './panels/SyncCard';
 import { Icon } from './ui';
 
@@ -13,6 +15,15 @@ function Spark({ values }: { values: number[] }) {
     <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden>
       <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
+  );
+}
+
+function Quota({ quota, cost }: { quota: QuotaDto; cost?: number | null }) {
+  const s = quotaStatus(quota, cost);
+  return (
+    <span className={`status-item ${s.low ? 'warn' : ''}`} data-tip={s.tip}>
+      <Icon name="dashboard" /> {s.text}
+    </span>
   );
 }
 
@@ -89,6 +100,7 @@ export function StatusBar() {
         </>
       )}
       <span className="status-spacer" />
+      {app.quota && <Quota quota={app.quota} cost={agent?.premiumCost} />}
       {sync?.repo && (
         <button
           type="button"
