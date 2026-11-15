@@ -68,6 +68,8 @@ pub struct AgentSpec {
     pub granted: Arc<parking_lot::Mutex<Vec<PathBuf>>>,
     /// Memory for this agent; `None` when memory is off or the agent is incognito.
     pub memory: Option<AgentMemory>,
+    /// Record the files the agent changes (for rewinding a turn along with its files).
+    pub track_files: bool,
 }
 
 /// What a model switch does to one of the session's settings (thinking effort, context window).
@@ -763,6 +765,7 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
             .with_enable_mcp_apps(true)
             .with_interactive_user(true)
             .with_include_sub_agent_streaming_events(false)
+            .with_enable_file_change_tracking(spec.track_files)
             .with_memory(memory_config);
         if let Some(store) = memory_store {
             config = config.with_memory_store(store);
@@ -794,6 +797,7 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
             .with_tools(tools)
             .with_interactive_user(true)
             .with_include_sub_agent_streaming_events(false)
+            .with_enable_file_change_tracking(spec.track_files)
             .with_memory(memory_config);
         if let Some(store) = memory_store {
             config = config.with_memory_store(store);

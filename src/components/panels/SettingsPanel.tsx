@@ -918,6 +918,13 @@ function buildSections({ settings, app, update, shells, memories, toReview }: Ct
           toggle: { on: settings.default_auto_approve, onChange: (on) => void change({ default_auto_approve: on }) },
         },
         {
+          id: 'track-files',
+          label: 'Track file changes for undo',
+          desc: 'Record the files agents change, so undoing a turn can put them back. Uses some disk space. Applies to sessions started or resumed after you change it.',
+          keywords: 'rewind undo restore revert snapshot checkpoint history files edits',
+          toggle: { on: settings.track_file_changes, onChange: (on) => void change({ track_file_changes: on }) },
+        },
+        {
           id: 'session-folders',
           label: 'Give each session its own folder',
           desc: 'Named after its first message, inside the sessions folder.',

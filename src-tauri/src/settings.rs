@@ -69,6 +69,8 @@ pub struct Settings {
     pub default_context: Option<String>,
     /// New sessions approve all tool calls unless the user switches it off for that session.
     pub default_auto_approve: bool,
+    /// Record the files agents change, so undoing a turn can restore them too.
+    pub track_file_changes: bool,
     /// Custom shell program for terminal bays (defaults to pwsh, then powershell).
     pub shell: Option<String>,
     pub show_reasoning: bool,
@@ -134,6 +136,7 @@ impl Default for Settings {
             default_effort: None,
             default_context: None,
             default_auto_approve: false,
+            track_file_changes: true,
             shell: None,
             show_reasoning: true,
             cursor_blink: true,
@@ -210,6 +213,7 @@ impl Settings {
         add("default_effort", json!(self.default_effort), json!({ "one_of": EFFORTS, "or": "null for each model's default" }), "How hard new agents think (reasoning effort). Models that don't offer the level use their default.");
         add("default_context", json!(self.default_context), json!({ "one_of": CONTEXT_TIERS, "or": "null for each model's usual window" }), "Context window new agents start with: \"default\" (standard) or \"long_context\" (larger, e.g. 1M tokens; can cost more per token). Models with one size ignore it.");
         add("default_auto_approve", json!(self.default_auto_approve), json!("boolean"), "Approve all tool calls in new sessions without asking, including commands and file changes. Existing and resumed sessions are unchanged; each new session can override this.");
+        add("track_file_changes", json!(self.track_file_changes), json!("boolean"), "Record the files agents change, so undoing a turn can restore them too. Applies to sessions started or resumed after the change.");
         add("shell", json!(self.shell), json!("a shell id (pwsh, powershell, cmd, git-bash, wsl), a program or command line, or null for the default"), "Shell that new terminal bays run.");
         add("sessions_folder", json!(self.sessions_root().display().to_string()), json!("absolute folder path, or null for ~\\Graysense\\Sessions"), "Where new sessions get their own folders.");
         add("session_folders", json!(self.session_folders), json!("boolean"), "Give every new session its own folder inside sessions_folder.");
@@ -285,6 +289,7 @@ impl Settings {
                 "performance_hud" => next.perf_hud = flag()?,
                 "default_model" => next.default_model = model()?,
                 "default_auto_approve" => next.default_auto_approve = flag()?,
+                "track_file_changes" => next.track_file_changes = flag()?,
                 "default_effort" => {
                     next.default_effort = if v.is_null() {
                         None

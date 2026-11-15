@@ -554,6 +554,7 @@ export interface Settings {
   default_effort: string | null;
   default_context: string | null;
   default_auto_approve: boolean;
+  track_file_changes: boolean;
   shell: string | null;
   sessions_folder: string;
   session_folders: boolean;

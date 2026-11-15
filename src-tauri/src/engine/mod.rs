@@ -734,6 +734,7 @@ impl Core {
             resume,
             granted: view.granted.clone(),
             memory,
+            track_files: self.settings.track_file_changes,
         }
     }
 
