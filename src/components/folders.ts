@@ -1,6 +1,6 @@
-import { act, changeFolder, learnsIn, newShell, setProjectLearning, setSide } from '../lib/api';
+import { act, changeFolder, learnsIn, newAgent, newShell, setProjectLearning, setSide } from '../lib/api';
 import { baseName, shortPath } from '../lib/format';
-import { useUi } from '../lib/store';
+import { openOverlay, useUi } from '../lib/store';
 import type { BayDto } from '../lib/types';
 import { type MenuItem, copyText } from './ui';
 
@@ -44,6 +44,15 @@ export function folderSubmenu(label: string, icon: string, open: (dir: string) =
 export function agentFolderItems(bay: BayDto): MenuItem[] {
   const move = (dir: string) => void changeFolder(bay.id, dir);
   const pick = () => void changeFolder(bay.id);
+  const w = bay.agent?.worktree;
+  if (bay.agent?.deferred && w?.pending) {
+    return [
+      { label: 'Start without a worktree', icon: 'folder', tip: `Work in ${w.repo} itself`, onSelect: () => move(w.repo) },
+      folderSubmenu('Start in a folder', 'arrow-swap', move, pick),
+      { sep: true },
+      { label: 'Reveal repository in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: w.repo }) },
+    ];
+  }
   if (bay.agent?.deferred) {
     return [
       folderSubmenu('Start in a folder', 'arrow-swap', move, pick),
@@ -51,13 +60,16 @@ export function agentFolderItems(bay: BayDto): MenuItem[] {
       { label: 'Sessions folder settings', icon: 'settings-gear', onSelect: () => void setSide('settings') },
     ];
   }
+  const worktree: MenuItem[] = w && !w.pending ? [{ label: 'Merge or open a pull request…', icon: 'git-merge', tip: `The branch ${w.branch}`, onSelect: () => openOverlay({ kind: 'worktree', bay: bay.id }) }, { sep: true }] : [];
   return [
+    ...worktree,
     folderSubmenu('Change folder', 'arrow-swap', move, pick, bay.cwd),
     { sep: true },
     { label: 'Reveal in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: bay.cwd }) },
     { label: 'Open in VS Code', icon: 'vscode', onSelect: () => void act({ type: 'openInVsCode', path: bay.cwd }) },
     { label: 'New terminal here', icon: 'terminal', onSelect: () => void newShell(bay.cwd) },
     { label: 'New agent here', icon: 'add', onSelect: () => void act({ type: 'newAgent', dir: bay.cwd }) },
+    { label: 'New agent in a worktree', icon: 'git-branch', tip: 'A new session with a worktree of its own, made from this folder’s repository', onSelect: () => void newAgent(bay.cwd, true) },
     { sep: true },
     { label: 'Copy path', icon: 'copy', onSelect: () => void copyText(bay.cwd, 'Path copied') },
     ...projectLearningItems(bay),

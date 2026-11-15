@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { captureIdea, toggleSidePanel, zoomBy } from '../components/Overlays';
-import { act, captureNote, newSession, newShell, setSide, toggleSide } from './api';
+import { act, captureNote, closeBay, newSession, newShell, setSide, toggleSide } from './api';
 import { focusComposer, openOverlay, useUi } from './store';
 import type { LayoutId } from './types';
 
@@ -39,7 +39,7 @@ export function useShortcuts() {
       else if (ctrl && e.shiftKey && k === 's') captureNote();
       else if (ctrl && e.shiftKey && k === 'n') void newSession();
       else if (ctrl && e.shiftKey && k === 't') void newShell(focused && !focused.agent?.deferred ? focused.cwd : null);
-      else if (ctrl && e.shiftKey && k === 'w' && focused) void act({ type: 'closeBay', bay: focused.id });
+      else if (ctrl && e.shiftKey && k === 'w' && focused) void closeBay(focused.id);
       else if (ctrl && e.shiftKey && k === 'enter' && focused) void act({ type: 'maximizeBay', bay: focused.id });
       else if (ctrl && e.shiftKey && k === 'l') {
         const now = s.settings?.layout ?? 'grid';

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { act, newAgent, newAgentIn, newSession, newShell, newShellIn } from '../lib/api';
+import { act, closeBay, newAgent, newAgentIn, newAgentInWorktreeOf, newSession, newShell, newShellIn } from '../lib/api';
 import { focusComposer, openOverlay, useUi } from '../lib/store';
 import type { BayDto, LayoutId } from '../lib/types';
 import { folderSubmenu } from './folders';
@@ -26,6 +26,7 @@ export function newMenu(anchor: Element) {
     { label: 'New session', icon: 'comment-discussion', hint: 'Ctrl+Shift+N', onSelect: () => void newSession() },
     { label: 'New incognito session', icon: 'eye-closed', onSelect: () => void newSession(undefined, true) },
     folderSubmenu('New agent in folder', 'folder-opened', (dir) => void newAgent(dir), () => void newAgentIn()),
+    folderSubmenu('New agent in a worktree', 'git-branch', (dir) => void newAgent(dir, true), () => void newAgentInWorktreeOf()),
     { sep: true },
     { label: 'New terminal', icon: 'terminal', hint: 'Ctrl+Shift+T', onSelect: () => void newShell() },
     folderSubmenu('New terminal in folder', 'folder', (dir) => void newShell(dir), () => void newShellIn()),
@@ -35,11 +36,12 @@ export function newMenu(anchor: Element) {
 
 function Tab({ b, on, index, onDragStart, dropSide }: { b: BayDto; on: boolean; index: number; onDragStart: (e: React.PointerEvent, b: BayDto) => void; dropSide: 'before' | 'after' | null }) {
   const icon = b.kind === 'shell' ? 'terminal' : b.agent?.incognito ? 'eye-closed' : null;
-  const tip = b.kind === 'shell' ? `${b.title} · ${b.folder}` : `${b.title}${b.agent ? ` · ${b.agent.status.label}` : ''}`;
+  const branch = b.agent?.worktree && !b.agent.worktree.pending ? ` · ${b.agent.worktree.branch}` : '';
+  const tip = b.kind === 'shell' ? `${b.title} · ${b.folder}` : `${b.title}${b.agent ? ` · ${b.agent.status.label}` : ''}${branch}`;
   const menu = (e: React.MouseEvent) => {
     e.preventDefault();
     const items: MenuItem[] = [
-      { label: 'Close', icon: 'close', hint: 'Ctrl+Shift+W', onSelect: () => void act({ type: 'closeBay', bay: b.id }) },
+      { label: 'Close', icon: 'close', hint: 'Ctrl+Shift+W', onSelect: () => void closeBay(b.id) },
       { label: 'Close others', icon: 'close-all', onSelect: () => useUi.getState().bays.filter((x) => x.id !== b.id).forEach((x) => void act({ type: 'closeBay', bay: x.id })) },
       { sep: true },
       { label: 'Maximize', icon: 'screen-full', hint: 'Ctrl+Shift+Enter', onSelect: () => void act({ type: 'maximizeBay', bay: b.id }) },
@@ -61,7 +63,7 @@ function Tab({ b, on, index, onDragStart, dropSide }: { b: BayDto; on: boolean; 
         void act({ type: 'focusBay', bay: b.id });
         if (b.kind === 'agent') focusComposer(b.id);
       }}
-      onAuxClick={(e) => e.button === 1 && void act({ type: 'closeBay', bay: b.id })}
+      onAuxClick={(e) => e.button === 1 && void closeBay(b.id)}
       onContextMenu={menu}
     >
       {icon ? <Icon name={icon} /> : <span className={`dot ${statusClass(b)}`} />}
@@ -74,7 +76,7 @@ function Tab({ b, on, index, onDragStart, dropSide }: { b: BayDto; on: boolean; 
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
-          void act({ type: 'closeBay', bay: b.id });
+          void closeBay(b.id);
         }}
       >
         <Icon name="close" />

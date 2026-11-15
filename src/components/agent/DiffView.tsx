@@ -108,6 +108,7 @@ export const DiffView = memo(function DiffView({ diff, cwd, truncated, note, ope
           <div key={fi} className="diff-file">
             <div className="diff-file-head">
               {status && <span className={`diff-status ${f.status}`}>{status}</span>}
+              {f.binary && <span className="diff-status">Binary</span>}
               <span className="diff-path" data-tip={p.full}>
                 {p.dir && <span className="diff-dir">{p.dir}</span>}
                 <span className="diff-base">{p.base}</span>

@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { act, newSession } from '../../lib/api';
+import { act, closeBay, newSession } from '../../lib/api';
 import { ago, agoLong, baseName, dateGroup, shortPath } from '../../lib/format';
 import { focusComposer, openOverlay, useUi } from '../../lib/store';
 import type { BayDto, BayId, Level, PastSessionDto } from '../../lib/types';
@@ -451,7 +451,7 @@ export function SessionsPanel() {
       if (sid) list.push({ label: pinned ? 'Unpin' : 'Pin', icon: pinned ? 'pinned' : 'pin', onSelect: () => void act({ type: 'pinSession', id: sid, pinned: !pinned }) });
       if (!a?.deferred) list.push({ label: 'Reveal folder', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: b.cwd }) });
       if (sid) list.push({ label: 'Copy session id', icon: 'copy', onSelect: () => void copyText(sid, 'Session id copied') });
-      list.push({ sep: true }, { label: 'Close', icon: 'close', onSelect: () => void act({ type: 'closeBay', bay: b.id }) });
+      list.push({ sep: true }, { label: 'Close', icon: 'close', onSelect: () => void closeBay(b.id) });
       if (sid) list.push({ label: 'Delete…', icon: 'trash', hint: 'Del', danger: true, onSelect: () => confirmDelete(sid, b.title) });
       return list;
     };
@@ -481,7 +481,7 @@ export function SessionsPanel() {
           </>
         }
         meta={st && <span className={`row-meta ses-status${st.busy ? ' shimmer' : ''}${st.attention ? ' attention' : ''}${st.kind === 'error' ? ' error' : ''}`}>{st.label}</span>}
-        actions={<ActionButton icon="close" tip="Close" onClick={() => void act({ type: 'closeBay', bay: b.id })} />}
+        actions={<ActionButton icon="close" tip="Close" onClick={() => void closeBay(b.id)} />}
         menuOpen={menuFor === en.key}
         renaming={renaming === en.key}
         onOpen={() => focusBay(b.id)}

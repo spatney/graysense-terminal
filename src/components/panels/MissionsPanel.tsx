@@ -290,6 +290,7 @@ function MissionCard({ m, bay, sendTo, fresh, onDelegated }: CardProps) {
       list.push({ label: 'Open session', icon: 'history', onSelect: () => void openSession(id) });
     }
     list.push({ label: 'Launch in new session', icon: 'play', onSelect: launch });
+    if (m.dir) list.push({ label: 'Launch in a new worktree', icon: 'git-branch', tip: 'A new session with a worktree of its own, made from the mission’s folder', onSelect: () => void act({ type: 'missionLaunch', id: m.id, worktree: true }) });
     if (sendTo) list.push({ label: `Send to ${sendTo.title}`, icon: 'send', onSelect: () => void act({ type: 'missionDelegate', id: m.id, bay: sendTo.id }) });
     list.push({ sep: true });
     if (m.dir) {

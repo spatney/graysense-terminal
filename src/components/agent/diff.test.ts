@@ -57,6 +57,19 @@ describe('reading diffs', () => {
       ['C:/app/b.ts', 1, 0],
     ]);
   });
+
+  it('reads binary files git only says differ', () => {
+    const files = parseUnifiedDiff(
+      'diff --git a/art/logo and icon.png b/art/logo and icon.png\nnew file mode 100644\nindex 0000000..1234567\nBinary files /dev/null and b/art/logo and icon.png differ\n' +
+        'diff --git a/old.bin b/old.bin\ndeleted file mode 100644\nindex 1234567..0000000\nBinary files a/old.bin and /dev/null differ\n' +
+        edit('src/x.ts', '@@ -1 +1 @@\n-a\n+A'),
+    );
+    expect(files.map((f) => [f.path, f.status, !!f.binary, f.hunks.length])).toEqual([
+      ['art/logo and icon.png', 'added', true, 0],
+      ['old.bin', 'deleted', true, 0],
+      ['src/x.ts', 'modified', false, 1],
+    ]);
+  });
 });
 
 describe('combining a file’s edits', () => {

@@ -639,6 +639,32 @@ pub struct AgentDto {
     pub resumable: bool,
     /// Premium requests the session has used, once the runtime says.
     pub premium_cost: Option<f64>,
+    /// The worktree of its own the session works in (or will, once its first message is sent).
+    pub worktree: Option<WorktreeDto>,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeDto {
+    pub path: String,
+    pub branch: String,
+    /// The branch it was made from, which merging goes into.
+    pub base: Option<String>,
+    /// The repository folder it was made from.
+    pub repo: String,
+    /// Not made yet: it's made when the first message is sent.
+    pub pending: bool,
+    /// What's being done to it ("Making a worktree…", "Merging…"…).
+    pub busy: Option<String>,
+}
+
+fn worktree_dto(v: &AgentView) -> Option<WorktreeDto> {
+    let busy = v.worktree_busy.map(str::to_owned);
+    if let Some(w) = &v.worktree {
+        return Some(WorktreeDto { path: w.path.display().to_string(), branch: w.branch.clone(), base: w.base_branch.clone(), repo: w.repo.display().to_string(), pending: false, busy });
+    }
+    let from = v.worktree_from.as_ref()?.display().to_string();
+    Some(WorktreeDto { path: from.clone(), branch: String::new(), base: None, repo: from, pending: true, busy })
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -732,7 +758,8 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         status: status_dto(&v.status),
         intent: v.intent.clone(),
         name: v.name.clone(),
-        deferred: v.deferred,
+        // A session whose worktree is being made shows its first message meanwhile.
+        deferred: v.deferred && v.worktree_busy.is_none(),
         incognito: v.incognito,
         tokens_in: v.tokens_in,
         tokens_out: v.tokens_out,
@@ -766,6 +793,7 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         handoff: v.handoff.as_ref().map(|h| HandoffDto { summary: h.summary.clone(), next: h.next.clone(), at: h.at * 1000 }),
         resumable: v.session_id.is_some() && v.has_history,
         premium_cost: v.premium_cost,
+        worktree: worktree_dto(v),
     }
 }
 

@@ -32,6 +32,8 @@ export interface DiffFile {
   hunks: DiffHunk[];
   added: number;
   removed: number;
+  /** Git only says a binary file differs. */
+  binary?: boolean;
 }
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
@@ -116,7 +118,14 @@ export function parseUnifiedDiff(diff: string): DiffFile[] {
     if (line.startsWith('+++ ')) file.newPath = headerPath(line.slice(4));
     else if (line.startsWith('new file mode') || line.startsWith('create file mode')) file.status = 'added';
     else if (line.startsWith('deleted file mode')) file.status = 'deleted';
-    else if (line.startsWith('rename from ')) {
+    else if (line.startsWith('Binary files ')) {
+      const b = /^Binary files (.+?) and ((?:b\/|\/dev\/null).*) differ$/.exec(line);
+      if (b) {
+        file.oldPath = headerPath(b[1]);
+        file.newPath = headerPath(b[2]);
+        file.binary = true;
+      }
+    } else if (line.startsWith('rename from ')) {
       file.status = 'renamed';
       file.oldPath = line.slice('rename from '.length).trim();
     } else if (line.startsWith('rename to ')) file.newPath = line.slice('rename to '.length).trim();

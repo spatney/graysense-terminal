@@ -20,10 +20,13 @@ use crate::util::{open_in_vscode, open_path, reveal_path};
 pub enum Action {
     // bays
     NewSession { prompt: Option<String>, #[serde(default)] incognito: bool },
-    NewAgent { dir: String, prompt: Option<String> },
+    /// `worktree`: the session gets a worktree of its own, made from `dir`'s repository.
+    NewAgent { dir: String, prompt: Option<String>, #[serde(default)] worktree: bool },
     NewShell { dir: Option<String>, shell: Option<String> },
     FocusBay { bay: BayId },
-    CloseBay { bay: BayId },
+    /// `worktree`: what to do with the session's worktree: "keep" it, "discard" it (and its
+    /// branch), or (left out) remove it only if nothing was done in it.
+    CloseBay { bay: BayId, #[serde(default)] worktree: Option<String> },
     MaximizeBay { bay: BayId },
     MoveBay { bay: BayId, to: usize },
     ShellTitle { bay: BayId, title: String },
@@ -57,8 +60,14 @@ pub enum Action {
     RewindConfirm { bay: BayId, restore_files: bool, #[serde(default)] text: Option<String> },
     RewindCancel { bay: BayId },
     /// Copy the session into a new one: up to the message at `index` (put in the copy's message
-    /// box), or all of it.
-    Fork { bay: BayId, #[serde(default)] index: Option<usize> },
+    /// box), or all of it. `worktree`: the copy works in a worktree of its own.
+    Fork { bay: BayId, #[serde(default)] index: Option<usize>, #[serde(default)] worktree: bool },
+    /// Merge the session's worktree branch into the branch it came from, committing what isn't
+    /// yet with `message` (the session's title if empty). `close`: then close the session and
+    /// remove the worktree.
+    WorktreeMerge { bay: BayId, #[serde(default)] message: String, #[serde(default)] close: bool },
+    /// Push the session's worktree branch and open the page for a pull request.
+    WorktreePublish { bay: BayId, #[serde(default)] message: String },
     /// Put away the note on where a resumed session left off.
     HandoffDismiss { bay: BayId },
     Reply { bay: BayId, index: usize, reply: Reply },
@@ -88,7 +97,8 @@ pub enum Action {
     MissionRemove { id: u64 },
     MissionUndoRemove,
     MissionSetDir { id: u64, dir: Option<String> },
-    MissionLaunch { id: u64 },
+    /// `worktree`: in a session with a worktree of its own, made from the mission's folder.
+    MissionLaunch { id: u64, #[serde(default)] worktree: bool },
     MissionDelegate { id: u64, bay: BayId },
     // memory
     MemoryAdd { text: String, kind: String, project: Option<String> },
@@ -201,13 +211,17 @@ impl Core {
                 let bay = self.new_session(prompt, incognito);
                 Ok(json!(bay))
             }
-            Action::NewAgent { dir, prompt } => {
+            Action::NewAgent { dir, prompt, worktree } => {
                 let dir = PathBuf::from(dir);
                 if !dir.is_dir() {
                     self.forget_dir(&dir);
                     return Err(format!("{} isn't a folder.", dir.display()));
                 }
-                Ok(json!(self.new_agent(dir, prompt.filter(|p| !p.trim().is_empty()), None, None, false)))
+                let prompt = prompt.filter(|p| !p.trim().is_empty());
+                if worktree {
+                    return Ok(json!(self.new_agent_in_worktree(dir, prompt)?));
+                }
+                Ok(json!(self.new_agent(dir, prompt, None, None, false)))
             }
             Action::NewShell { dir, shell } => {
                 if let Some(gone) = dir.as_deref().map(PathBuf::from).filter(|d| !d.is_dir()) {
@@ -220,8 +234,8 @@ impl Core {
                 self.focus(bay);
                 ok
             }
-            Action::CloseBay { bay } => {
-                self.close_bay(bay);
+            Action::CloseBay { bay, worktree } => {
+                self.close_with_worktree(bay, worktree.as_deref());
                 ok
             }
             Action::MaximizeBay { bay } => {
@@ -334,7 +348,10 @@ impl Core {
                 self.rewind_cancel(bay);
                 ok
             }
-            Action::Fork { bay, index } => self.fork(bay, index).map(|_| Value::Null),
+            Action::Fork { bay, index, worktree: false } => self.fork(bay, index).map(|_| Value::Null),
+            Action::Fork { bay, index, worktree: true } => self.fork_into_worktree(bay, index).map(|_| Value::Null),
+            Action::WorktreeMerge { bay, message, close } => self.merge_worktree(bay, message, close).map(|_| Value::Null),
+            Action::WorktreePublish { bay, message } => self.publish_worktree(bay, message).map(|_| Value::Null),
             Action::HandoffDismiss { bay } => {
                 if let Some(v) = self.agent_mut(bay) {
                     v.handoff = None;
@@ -439,7 +456,7 @@ impl Core {
             }
             Action::DeleteSession { id } => {
                 if let Some(bay) = self.bays.iter().find(|b| matches!(&b.kind, BayKind::Agent(v) if v.session_id.as_deref() == Some(id.as_str()))).map(|b| b.id) {
-                    self.close_bay(bay);
+                    self.close_with_worktree(bay, None);
                 }
                 self.sessions.retain(|s| s.id != id);
                 self.session_index.remove(&id);
@@ -493,8 +510,12 @@ impl Core {
                 self.missions.set_dir(id, dir.map(PathBuf::from).filter(|d| d.is_dir()));
                 ok
             }
-            Action::MissionLaunch { id } => {
-                self.launch_mission(id);
+            Action::MissionLaunch { id, worktree } => {
+                if worktree {
+                    self.launch_mission_in_worktree(id)?;
+                } else {
+                    self.launch_mission(id);
+                }
                 ok
             }
             Action::MissionDelegate { id, bay } => self.send_mission_to(bay, id).map(|_| Value::Null),
@@ -806,6 +827,9 @@ impl Core {
         }
         if v.rewind.as_ref().is_some_and(|r| r.running) {
             return Err("Wait for the conversation to finish rewinding.".into());
+        }
+        if let Some(busy) = v.worktree_busy {
+            return Err(format!("{busy} Send your message when it's done."));
         }
         if v.deferred {
             self.start_deferred_as(bay, text, sent);

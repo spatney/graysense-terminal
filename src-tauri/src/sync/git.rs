@@ -197,10 +197,10 @@ impl Remote {
 }
 
 /// What a finished process left.
-struct Ran {
-    ok: bool,
-    stdout: String,
-    stderr: String,
+pub(crate) struct Ran {
+    pub(crate) ok: bool,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
 /// What a child process printed so far, read on a thread as it comes so a chatty process can't
@@ -254,7 +254,7 @@ fn kill_tree(child: &mut std::process::Child) {
 }
 
 /// Run a command to its end, or stop it (and what it started) when `limit` passes.
-fn run(mut cmd: Command, limit: Duration) -> std::io::Result<Ran> {
+pub(crate) fn run(mut cmd: Command, limit: Duration) -> std::io::Result<Ran> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let out = Drain::start(child.stdout.take());
     let err = Drain::start(child.stderr.take());
@@ -279,7 +279,7 @@ fn run(mut cmd: Command, limit: Duration) -> std::io::Result<Ran> {
     }
 }
 
-fn hide_window(cmd: &mut Command) {
+pub(crate) fn hide_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

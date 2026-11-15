@@ -426,6 +426,8 @@ pub struct Project {
 impl Project {
     pub fn for_dir(dir: &Path) -> Project {
         let root = dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(dir).to_path_buf();
+        // A session in a worktree Graysense made works on the repository's project.
+        let root = crate::worktree::detect(&root).map(|w| w.repo).unwrap_or(root);
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| root.display().to_string());
         Project { key: project_key(&root), name, root }
     }

@@ -174,6 +174,13 @@ pub fn read_image(path: String) -> Result<tauri::ipc::Response, String> {
     crate::util::read_image(Path::new(&path)).map(tauri::ipc::Response::new)
 }
 
+/// What was done in a session's worktree (and the diff, if `diff`), before it's merged or closed.
+#[tauri::command(async)]
+pub fn worktree_review(path: String, diff: bool) -> Result<crate::worktree::Review, String> {
+    let info = crate::worktree::detect(Path::new(&path)).ok_or("That isn't a worktree Graysense made.")?;
+    crate::worktree::review(&info, diff)
+}
+
 // ------------------------------------------------------------------ terminals
 
 #[tauri::command(async)]

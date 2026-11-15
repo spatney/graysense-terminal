@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { act, captureNote, learnsIn, setProjectLearning, setSide } from '../../lib/api';
-import { setDock, useUi } from '../../lib/store';
+import { act, captureNote, closeBay, learnsIn, setProjectLearning, setSide } from '../../lib/api';
+import { openOverlay, setDock, useUi } from '../../lib/store';
 import type { BayDto, ItemDto } from '../../lib/types';
 import { agentFolderItems } from '../folders';
 import { statusClass } from '../Strip';
@@ -22,6 +22,8 @@ function BayHead({ bay }: { bay: BayDto }) {
   const notLearning = useUi((s) => !agent.incognito && (s.settings?.['memory.enabled'] ?? true) && !learnsIn(s.settings, agent.projectKey));
   const mission = agent.mission != null ? missions.find((m) => m.id === agent.mission) : null;
   const extras = agent.canvases.length + agent.apps.length;
+  const worktree = agent.worktree && !agent.worktree.pending ? agent.worktree : null;
+  const cantFork = !agent.sessionId || agent.deferred || agent.status.busy;
 
   const save = () => {
     if (renaming != null && renaming.trim() !== bay.title) void act({ type: 'rename', bay: bay.id, name: renaming });
@@ -35,12 +37,14 @@ function BayHead({ bay }: { bay: BayDto }) {
       { label: 'Rename', icon: 'edit', onSelect: () => setRenaming(bay.title) },
       { label: 'Save a note about this session', icon: 'bookmark', hint: 'Ctrl+Shift+S', onSelect: () => captureNote({ session: agent.sessionId, title: bay.title }) },
       { label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', disabled: agent.incognito || notLearning, onSelect: () => void act({ type: 'learnNow', bay: bay.id }) },
-      { label: 'Fork into a new session', icon: 'repo-forked', disabled: !agent.sessionId || agent.deferred || agent.status.busy, onSelect: () => void act({ type: 'fork', bay: bay.id }) },
+      { label: 'Fork into a new session', icon: 'repo-forked', disabled: cantFork, onSelect: () => void act({ type: 'fork', bay: bay.id }) },
+      { label: 'Fork into a worktree', icon: 'git-branch', tip: 'The copy works in a worktree of its own, so the two sessions don’t change the same files', disabled: cantFork, onSelect: () => void act({ type: 'fork', bay: bay.id, worktree: true }) },
+      ...(worktree ? [{ label: 'Merge or open a pull request…', icon: 'git-merge', onSelect: () => openOverlay({ kind: 'worktree', bay: bay.id }) }] : []),
       { label: agent.autoApprove ? 'Ask before running tools' : 'Approve all tool calls', icon: 'shield', onSelect: () => void act({ type: 'setAutoApprove', bay: bay.id, on: !agent.autoApprove }) },
       { label: 'Clear transcript', icon: 'clear-all', onSelect: () => void act({ type: 'clearTranscript', bay: bay.id }) },
       { sep: true },
       { label: 'Maximize', icon: 'screen-full', hint: 'Ctrl+Shift+Enter', onSelect: () => void act({ type: 'maximizeBay', bay: bay.id }) },
-      { label: 'Close', icon: 'close', hint: 'Ctrl+Shift+W', onSelect: () => void act({ type: 'closeBay', bay: bay.id }) },
+      { label: 'Close', icon: 'close', hint: 'Ctrl+Shift+W', onSelect: () => void closeBay(bay.id) },
     ];
     showMenu(anchor, items, { alignRight: true });
   };
@@ -83,6 +87,16 @@ function BayHead({ bay }: { bay: BayDto }) {
       {!agent.deferred && (
         <button type="button" className="bay-crumb" data-tip={bay.cwd} onClick={(e) => folderMenu(e.currentTarget)}>
           <Icon name="folder" /> <span className="ellipsis">{bay.folder}</span>
+        </button>
+      )}
+      {worktree && (
+        <button
+          type="button"
+          className="bay-crumb worktree-chip"
+          data-tip={worktree.busy ?? `Works in a worktree of its own, on the branch ${worktree.branch}${worktree.base ? ` (from ${worktree.base})` : ''}. Click to review it, merge it or open a pull request.`}
+          onClick={() => openOverlay({ kind: 'worktree', bay: bay.id })}
+        >
+          {worktree.busy ? <span className="spinner sm" /> : <Icon name="git-branch" />} <span className="ellipsis">{worktree.branch}</span>
         </button>
       )}
       {mission && (

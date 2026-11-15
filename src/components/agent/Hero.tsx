@@ -36,7 +36,14 @@ export function Hero({ bay }: { bay: BayDto | null }) {
     setDraft(id, prompt);
     focusComposer(id);
   };
-  const where = agent && !agent.deferred ? { lead: 'Working in', path: bay!.cwd } : folders && root ? { lead: 'New sessions get their own folder in', path: root } : null;
+  const pendingWorktree = agent?.worktree?.pending ? agent.worktree : null;
+  const where = pendingWorktree
+    ? { lead: 'Works in a new worktree of', path: pendingWorktree.repo }
+    : agent && !agent.deferred
+      ? { lead: 'Working in', path: bay!.cwd }
+      : folders && root
+        ? { lead: 'New sessions get their own folder in', path: root }
+        : null;
   return (
     <div className="chat fresh">
       <div className="hero">
@@ -51,10 +58,16 @@ export function Hero({ bay }: { bay: BayDto | null }) {
           <button
             type="button"
             className="bay-crumb hero-folder"
-            data-tip={bay?.agent ? where.path : `${where.path} · Change in Settings`}
+            data-tip={
+              pendingWorktree
+                ? `When you send the first message, the session gets a worktree of ${where.path} on a branch of its own, so it doesn't change files other sessions are working on. Click for other choices.`
+                : bay?.agent
+                  ? where.path
+                  : `${where.path} · Change in Settings`
+            }
             onClick={(e) => (bay?.agent ? showMenu(e.currentTarget, agentFolderItems(bay)) : void setSide('settings'))}
           >
-            <Icon name="folder" />
+            <Icon name={pendingWorktree ? 'git-branch' : 'folder'} />
             <span className="ellipsis">
               {where.lead} {shortPath(where.path, home)}
             </span>

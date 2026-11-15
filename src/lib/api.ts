@@ -3,7 +3,8 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { applyUpdate, focusComposer, openOverlay, toast, useUi } from './store';
-import type { Action, BayId, DirEntry, PanelId, SearchHit, Settings, UiUpdate } from './types';
+import { plural, shortPath } from './format';
+import type { Action, BayId, DirEntry, PanelId, SearchHit, Settings, UiUpdate, WorktreeReview } from './types';
 
 /** Run a core action. Errors are shown as a toast and resolve to `undefined`. */
 export async function act<T = unknown>(action: Action): Promise<T | undefined> {
@@ -42,6 +43,38 @@ export const savePastedImage = (bytes: Uint8Array) => invoke<string>('save_paste
 export const readText = (path: string) => invoke<string | null>('read_text', { path });
 /** An image file's bytes, for a preview (the core only reads image files). */
 export const readImage = (path: string) => invoke<ArrayBuffer>('read_image', { path });
+/** What was done in a session's worktree (and the diff, if `diff`). */
+export const worktreeReview = (path: string, diff: boolean) => invoke<WorktreeReview>('worktree_review', { path, diff });
+
+/** Whether a worktree has anything in it worth keeping (Graysense removes it otherwise). */
+export const hasWork = (r: WorktreeReview) => r.files.length > 0 || r.ahead > 0 || r.dirty;
+
+/** What a worktree's branch has, in words ("3 files changed, 2 commits"). */
+export function workSummary(r: WorktreeReview): string {
+  const parts = [r.files.length > 0 && `${plural(r.files.length, 'file')} changed`, r.ahead > 0 && plural(r.ahead, 'commit'), r.dirty && r.ahead > 0 && 'some not committed yet'];
+  return parts.filter(Boolean).join(', ') || 'nothing changed';
+}
+
+/**
+ * Close a bay. A session whose worktree has work in it asks first whether to keep the worktree
+ * (to merge it later) or delete it; otherwise the core removes an unused one by itself.
+ */
+export async function closeBay(bay: BayId) {
+  const s = useUi.getState();
+  const b = s.bays.find((x) => x.id === bay);
+  const w = b?.agent?.worktree;
+  if (!w || w.pending || w.busy) return act({ type: 'closeBay', bay });
+  const review = await worktreeReview(w.path, false).catch(() => null);
+  if (!review || !hasWork(review)) return act({ type: 'closeBay', bay });
+  openOverlay({
+    kind: 'confirm',
+    title: `Close “${b!.title}”?`,
+    body: `Its worktree, ${shortPath(w.path, s.app?.home)}, has work that isn't merged into ${w.base ?? 'another branch'} yet (${workSummary(review)}). Keep it to merge it or open a pull request later from the reopened session, or delete it and its branch ${w.branch}.`,
+    confirm: 'Keep worktree and close',
+    onConfirm: () => void act({ type: 'closeBay', bay, worktree: 'keep' }),
+    other: { label: 'Delete worktree', danger: true, run: () => void act({ type: 'closeBay', bay, worktree: 'discard' }) },
+  });
+}
 
 /** Run what a toast's button asks for (an action, or a link). */
 export function runToastAction(action: any) {
@@ -131,11 +164,17 @@ export async function newAgentIn() {
   if (dir) await newAgent(dir);
 }
 
-/** A new agent working in `dir`, ready to type to. */
-export async function newAgent(dir: string) {
-  const bay = await act<BayId>({ type: 'newAgent', dir });
+/** A new agent working in `dir` (`worktree`: in a worktree of its own, made from `dir`'s repository), ready to type to. */
+export async function newAgent(dir: string, worktree = false) {
+  const bay = await act<BayId>({ type: 'newAgent', dir, worktree });
   if (bay != null) focusComposer(bay);
   return bay;
+}
+
+/** A new agent in a worktree of its own, made from a repository the user picks. */
+export async function newAgentInWorktreeOf() {
+  const dir = await pickFolder('Choose a repository for the worktree', useUi.getState().app?.defaultDir);
+  if (dir) await newAgent(dir, true);
 }
 
 /**

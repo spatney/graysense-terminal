@@ -69,6 +69,46 @@ export interface AgentDto {
   resumable: boolean;
   /** Premium requests the session has used, once the runtime says. */
   premiumCost: number | null;
+  /** The worktree of its own the session works in (or will, once its first message is sent). */
+  worktree?: WorktreeDto | null;
+}
+
+export interface WorktreeDto {
+  path: string;
+  branch: string;
+  /** The branch it was made from, which merging goes into. */
+  base: string | null;
+  /** The repository folder it was made from. */
+  repo: string;
+  /** Not made yet: it's made when the first message is sent. */
+  pending: boolean;
+  /** What's being done to it ("Making a worktree…", "Merging…"…). */
+  busy: string | null;
+}
+
+export interface WorktreeFileStat {
+  path: string;
+  /** Lines added and removed (null for a binary file). */
+  added: number | null;
+  removed: number | null;
+}
+
+/** What a worktree's branch changes since it left its base, uncommitted changes included. */
+export interface WorktreeReview {
+  branch: string;
+  base: string | null;
+  files: WorktreeFileStat[];
+  added: number;
+  removed: number;
+  /** Commits on the branch the base doesn't have. */
+  ahead: number;
+  /** Commits on the base since the branch left it. */
+  behind: number;
+  /** Some changes aren't committed yet. */
+  dirty: boolean;
+  diff: string | null;
+  /** The diff was cut short. */
+  truncated: boolean;
 }
 
 export interface HandoffDto {
@@ -705,10 +745,12 @@ export type Reply =
 /** Everything the core can do (Rust `Action`). */
 export type Action =
   | { type: 'newSession'; prompt?: string | null; incognito?: boolean }
-  | { type: 'newAgent'; dir: string; prompt?: string | null }
+  /** `worktree`: the session gets a worktree of its own, made from `dir`'s repository. */
+  | { type: 'newAgent'; dir: string; prompt?: string | null; worktree?: boolean }
   | { type: 'newShell'; dir?: string | null; shell?: string | null }
   | { type: 'focusBay'; bay: BayId }
-  | { type: 'closeBay'; bay: BayId }
+  /** `worktree`: keep the session's worktree, discard it (and its branch), or (left out) remove it only if nothing was done in it. */
+  | { type: 'closeBay'; bay: BayId; worktree?: 'keep' | 'discard' }
   | { type: 'maximizeBay'; bay: BayId }
   | { type: 'moveBay'; bay: BayId; to: number }
   | { type: 'shellTitle'; bay: BayId; title: string }
@@ -728,7 +770,11 @@ export type Action =
   | { type: 'rewindStart'; bay: BayId; index: number; then: 'undo' | 'edit' | 'retry'; model?: string | null }
   | { type: 'rewindConfirm'; bay: BayId; restoreFiles: boolean; text?: string | null }
   | { type: 'rewindCancel'; bay: BayId }
-  | { type: 'fork'; bay: BayId; index?: number }
+  | { type: 'fork'; bay: BayId; index?: number; worktree?: boolean }
+  /** Merge the session's worktree branch into the branch it came from; `close`: then close the session and remove the worktree. */
+  | { type: 'worktreeMerge'; bay: BayId; message?: string; close?: boolean }
+  /** Push the session's worktree branch and open the page for a pull request. */
+  | { type: 'worktreePublish'; bay: BayId; message?: string }
   | { type: 'handoffDismiss'; bay: BayId }
   | { type: 'reply'; bay: BayId; index: number; reply: Reply }
   | { type: 'forgetMemories'; bay: BayId; index: number }
@@ -754,7 +800,7 @@ export type Action =
   | { type: 'missionRemove'; id: number }
   | { type: 'missionUndoRemove' }
   | { type: 'missionSetDir'; id: number; dir: string | null }
-  | { type: 'missionLaunch'; id: number }
+  | { type: 'missionLaunch'; id: number; worktree?: boolean }
   | { type: 'missionDelegate'; id: number; bay: BayId }
   | { type: 'memoryAdd'; text: string; kind: MemoryKind; project: string | null }
   | { type: 'memoryEdit'; id: number; text: string; kind: MemoryKind; project: string | null }

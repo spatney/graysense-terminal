@@ -9,6 +9,7 @@ mod learn;
 mod rewind;
 mod syncer;
 mod tidy;
+mod worktrees;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -114,6 +115,9 @@ enum SavedBay {
         /// Messages it hadn't read yet, sent again when the session is back.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         unread: Vec<Unread>,
+        /// A new session to get a worktree of its own, made from this repository folder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree_from: Option<String>,
     },
     Shell {
         cwd: String,
@@ -328,6 +332,8 @@ pub struct Core {
     quota_stale: bool,
     /// Windows notifications waiting for the next flush.
     os_notes: Vec<crate::notify::Note>,
+    /// Git at work on sessions' worktrees.
+    worktrees: worktrees::Worktrees,
 }
 
 /// How long nothing may change before a flush stops waiting to batch more changes.
@@ -395,6 +401,7 @@ impl Core {
             quota_at: None,
             quota_stale: false,
             os_notes: Vec::new(),
+            worktrees: worktrees::Worktrees::new(),
         };
         crate::memory::set_switches(core.settings.memory.enabled, core.settings.memory.inject);
         core.note_new_version();
@@ -439,11 +446,14 @@ impl Core {
         let Some(ws) = settings::read_json::<Workspace>(&Self::workspace_path()) else { return };
         for b in ws.bays {
             match b {
-                SavedBay::Agent { cwd, session_id, incognito, fresh, auto_approve, working, unread } => {
+                SavedBay::Agent { cwd, session_id, incognito, fresh, auto_approve, working, unread, worktree_from } => {
                     let cwd = PathBuf::from(cwd);
                     let resumes = session_id.is_some();
                     let bay = if fresh {
-                        self.new_session(None, incognito)
+                        match worktree_from.map(PathBuf::from).filter(|d| d.is_dir()) {
+                            Some(from) => self.new_worktree_session(from),
+                            None => self.new_session(None, incognito),
+                        }
                     } else if cwd.is_dir() {
                         self.new_agent(cwd, None, session_id, None, incognito)
                     } else {
@@ -490,6 +500,7 @@ impl Core {
                         auto_approve: Some(v.auto_approve.load(Ordering::Relaxed)),
                         working,
                         unread,
+                        worktree_from: v.worktree_from.as_ref().filter(|_| v.deferred).map(|d| d.display().to_string()),
                     }
                 }
                 BayKind::Shell(s) => SavedBay::Shell { cwd: s.cwd.display().to_string(), shell: s.shell.clone() },
@@ -608,9 +619,10 @@ impl Core {
         id
     }
 
-    /// Offer `dir` among the recent folders (session folders aren't: there are too many of them).
+    /// Offer `dir` among the recent folders (session folders and worktrees aren't: there are too
+    /// many of them).
     fn remember_dir(&mut self, dir: &Path) {
-        if !sessions::is_under(dir, &self.settings.sessions_root()) {
+        if !sessions::is_under(dir, &self.settings.sessions_root()) && crate::worktree::detect(dir).is_none() {
             self.settings.push_recent_dir(dir);
             self.settings_dirty = true;
         }
@@ -629,9 +641,14 @@ impl Core {
     pub fn change_folder(&mut self, bay: BayId, dir: PathBuf) -> Result<(), String> {
         let project = self.project_for(&dir);
         let v = self.agent(bay).ok_or("That agent is closed.")?;
+        if v.worktree_busy.is_some() {
+            return Err("Wait for what's being done to the session's worktree to finish first.".into());
+        }
         if v.deferred {
             let v = self.agent_mut(bay).ok_or("That agent is closed.")?;
             v.deferred = false;
+            v.worktree_from = None;
+            v.worktree = crate::worktree::detect(&dir);
             v.cwd = dir.clone();
             v.project = project;
             v.status = Status::Booting;
@@ -670,7 +687,7 @@ impl Core {
         }
         // An empty new session is already open: go to it rather than adding another.
         let blank = self.bays.iter().find_map(|b| match &b.kind {
-            BayKind::Agent(v) if v.deferred && v.items.is_empty() && v.attachments.is_empty() && v.incognito == incognito => Some(b.id),
+            BayKind::Agent(v) if v.deferred && v.worktree_from.is_none() && v.items.is_empty() && v.attachments.is_empty() && v.incognito == incognito => Some(b.id),
             _ => None,
         });
         if let Some(id) = blank {
@@ -714,6 +731,10 @@ impl Core {
 
     /// Like [`Self::start_deferred`], showing `shown` while sending `sent` (which can carry more context).
     fn start_deferred_as(&mut self, bay: BayId, shown: String, sent: String) {
+        if self.agent(bay).is_some_and(|v| v.worktree_from.is_some()) {
+            self.start_in_worktree(bay, shown, sent);
+            return;
+        }
         let text = shown;
         let dir = self.create_session_folder(&text);
         let project = self.project_for(&dir);
@@ -768,6 +789,7 @@ impl Core {
             granted: view.granted.clone(),
             memory,
             track_files: self.settings.track_file_changes,
+            instructions: view.worktree.as_ref().map(crate::worktree::instructions),
         }
     }
 
@@ -860,8 +882,16 @@ impl Core {
             self.focus(bay);
             return bay;
         }
-        let dir = self.session_index.get(&id).and_then(|m| m.folder.clone()).map(PathBuf::from).filter(|d| d.is_dir()).or_else(|| session_cwd(&id).filter(|d| d.is_dir())).unwrap_or_else(|| self.settings.default_dir());
+        let folder = self.session_index.get(&id).and_then(|m| m.folder.clone()).map(PathBuf::from);
+        let live = folder.clone().filter(|d| d.is_dir()).or_else(|| session_cwd(&id).filter(|d| d.is_dir()));
+        // A session whose worktree was removed carries on in the repository.
+        let repo = if live.is_none() { folder.as_deref().and_then(crate::worktree::repo_of_removed) } else { None };
+        let dir = live.or_else(|| repo.clone()).unwrap_or_else(|| self.settings.default_dir());
         let bay = self.new_agent(dir, None, Some(id), None, false);
+        if let Some(repo) = repo {
+            let project = self.project_for(&repo);
+            self.backend.send(Cmd::SetCwd { bay, dir: repo, project });
+        }
         self.offer_handoff(bay, 0);
         bay
     }
@@ -908,6 +938,9 @@ impl Core {
         let Some(m) = self.missions.get(id).cloned() else { return Err("That mission no longer exists.".into()) };
         let Some(index) = self.bay_index(bay) else { return Err("That bay is closed.".into()) };
         match &mut self.bays[index].kind {
+            BayKind::Agent(v) if v.worktree_busy.is_some() => {
+                return Err(format!("{} Send the mission when it's done.", v.worktree_busy.unwrap_or_default()));
+            }
             BayKind::Agent(v) if v.deferred => {
                 v.mission = Some(id);
                 self.start_deferred(bay, m.brief());
@@ -1162,10 +1195,12 @@ impl Core {
                 let project = self.project_for(&dir);
                 let shown = sessions::display_path(&dir, &self.settings.sessions_root());
                 let Some(v) = self.agent_mut(bay) else { return };
+                let moved = crate::memory::project_key(&v.cwd) != crate::memory::project_key(&dir);
                 v.cwd = dir.clone();
                 v.project = project;
+                v.worktree = crate::worktree::detect(&dir);
                 // An empty session shows its folder on its home screen; a conversation says where it went on.
-                if !v.items.is_empty() {
+                if moved && !v.items.is_empty() {
                     v.notice(Level::Info, format!("Now working in {shown}"));
                 }
                 if let Some(id) = v.session_id.clone() {
@@ -1483,6 +1518,7 @@ impl Core {
         self.memory_tick();
         self.sync_tick();
         self.tidy_tick();
+        self.worktree_tick();
         self.quota_tick();
         if self.last_save.elapsed() > Duration::from_secs(3) {
             self.save();

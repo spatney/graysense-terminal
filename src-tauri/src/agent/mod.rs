@@ -463,6 +463,13 @@ pub struct AgentView {
     pub rewind: Option<Rewind>,
     /// Where a resumed session left off, shown until the user moves on.
     pub handoff: Option<crate::memory::Handoff>,
+    /// The worktree Graysense made for this session, when it works in one.
+    pub worktree: Option<crate::worktree::Info>,
+    /// A new session that gets a worktree of its own, made from this repository folder, with its
+    /// first message.
+    pub worktree_from: Option<PathBuf>,
+    /// What's being done to the worktree (making it, merging…), while it's done.
+    pub worktree_busy: Option<&'static str>,
 }
 
 /// An MCP App view docked in an agent bay.
@@ -576,6 +583,7 @@ pub fn tool_label(card: &ToolCard, target: Option<&str>) -> String {
 impl AgentView {
     pub fn new(bay: BayId, cwd: PathBuf, mode: Mode) -> Self {
         let project = crate::memory::Project::for_dir(&cwd);
+        let worktree = crate::worktree::detect(&cwd);
         AgentView {
             bay,
             session_id: None,
@@ -622,6 +630,9 @@ impl AgentView {
             carry_on: None,
             rewind: None,
             handoff: None,
+            worktree,
+            worktree_from: None,
+            worktree_busy: None,
         }
     }
 

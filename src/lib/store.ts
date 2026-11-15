@@ -24,7 +24,10 @@ export type Overlay =
   | { kind: 'shortcuts' }
   | { kind: 'note'; text?: string; files?: string[]; session?: string | null; title?: string | null }
   | { kind: 'image'; path: string }
-  | { kind: 'confirm'; title: string; body: string; confirm: string; danger?: boolean; onConfirm: () => void };
+  /** Merge a session's worktree, open a pull request from it, or delete it. */
+  | { kind: 'worktree'; bay: BayId }
+  /** `other`: a third choice, between Cancel and `confirm`. */
+  | { kind: 'confirm'; title: string; body: string; confirm: string; danger?: boolean; onConfirm: () => void; other?: { label: string; danger?: boolean; run: () => void } };
 
 export interface LocalToast extends ToastDto {
   born: number;

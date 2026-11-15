@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { act, captureNote, changeFolder, newAgentIn, newSession, newShell, newShellIn, restartToUpdate, revealMemory, search, setSide, toggleSide } from '../lib/api';
+import { act, captureNote, changeFolder, closeBay, newAgentIn, newAgentInWorktreeOf, newSession, newShell, newShellIn, restartToUpdate, revealMemory, search, setSide, toggleSide } from '../lib/api';
 import { rankNotes } from '../lib/notes';
 import { NoteCapture } from './NoteCapture';
 import { ago, baseName, contextLabel, effortLabel, plural, shortPath } from '../lib/format';
@@ -8,6 +8,7 @@ import { focusComposer, openOverlay, type Overlay, toast, useUi } from '../lib/s
 import { THEMES } from '../lib/theme';
 import type { SearchHit } from '../lib/types';
 import { Icon, Kbd, Modal, copyText } from './ui';
+import { WorktreeDialog } from './agent/WorktreeDialog';
 
 export function Overlays() {
   const overlay = useUi((s) => s.overlay);
@@ -26,6 +27,8 @@ export function Overlays() {
       return <NoteOverlay o={overlay} onClose={close} />;
     case 'image':
       return <ImageOverlay key={overlay.path} path={overlay.path} onClose={close} />;
+    case 'worktree':
+      return <WorktreeDialog key={overlay.bay} bay={overlay.bay} onClose={close} />;
   }
 }
 
@@ -282,6 +285,7 @@ function useCommands(): Command[] {
     { id: 'new', label: 'New session', icon: 'comment-discussion', group: 'Start', keys: ['Ctrl', 'Shift', 'N'], run: () => void newSession() },
     { id: 'new-incognito', label: 'New incognito session (no memory)', icon: 'eye-closed', group: 'Start', run: () => void newSession(undefined, true) },
     { id: 'new-in', label: 'New agent in folder…', icon: 'folder-opened', group: 'Start', run: () => void newAgentIn() },
+    { id: 'new-worktree', label: 'New agent in a worktree…', icon: 'git-branch', group: 'Start', run: () => void newAgentInWorktreeOf() },
     { id: 'term', label: 'New terminal', icon: 'terminal', group: 'Start', keys: ['Ctrl', 'Shift', 'T'], run: () => void newShell() },
     { id: 'term-in', label: 'New terminal in folder…', icon: 'folder', group: 'Start', run: () => void newShellIn() },
     { id: 'idea', label: 'Capture an idea', icon: 'rocket', group: 'Start', keys: ['Ctrl', 'Shift', 'I'], run: () => captureIdea() },
@@ -314,7 +318,7 @@ function useCommands(): Command[] {
   ];
   if (focused) {
     cmds.push(
-      { id: 'close', label: `Close “${focused.title}”`, icon: 'close', group: 'Bay', keys: ['Ctrl', 'Shift', 'W'], run: () => void act({ type: 'closeBay', bay: focused.id }) },
+      { id: 'close', label: `Close “${focused.title}”`, icon: 'close', group: 'Bay', keys: ['Ctrl', 'Shift', 'W'], run: () => void closeBay(focused.id) },
       { id: 'max', label: 'Maximize bay', icon: 'screen-full', group: 'Bay', keys: ['Ctrl', 'Shift', '↵'], run: () => void act({ type: 'maximizeBay', bay: focused.id }) },
       { id: 'reveal', label: 'Reveal folder in File Explorer', icon: 'folder-opened', group: 'Bay', run: () => void act({ type: 'revealPath', path: focused.cwd }) },
       { id: 'vscode', label: 'Open folder in VS Code', icon: 'vscode', group: 'Bay', run: () => void act({ type: 'openInVsCode', path: focused.cwd }) },
@@ -328,6 +332,10 @@ function useCommands(): Command[] {
           : []),
         { id: 'learn', label: 'Learn from this conversation now', icon: 'lightbulb-sparkle', group: 'Bay', run: () => void act({ type: 'learnNow', bay: focused.id }) },
         { id: 'clear', label: 'Clear transcript', icon: 'clear-all', group: 'Bay', run: () => void act({ type: 'clearTranscript', bay: focused.id }) },
+        ...(agent.sessionId && !agent.deferred ? [{ id: 'fork-worktree', label: 'Fork into a worktree', icon: 'git-branch', group: 'Bay', run: () => void act({ type: 'fork', bay: focused.id, worktree: true }) }] : []),
+        ...(agent.worktree && !agent.worktree.pending
+          ? [{ id: 'worktree', label: `Merge or open a pull request for ${agent.worktree.branch}…`, icon: 'git-merge', group: 'Bay', run: () => setTimeout(() => openOverlay({ kind: 'worktree', bay: focused.id })) }]
+          : []),
       );
       const models = s.app?.models ?? [];
       const current = models.find((m) => m.id === (agent.model ?? s.settings?.default_model));
@@ -516,6 +524,18 @@ function Confirm({ o, onClose }: { o: Extract<Overlay, { kind: 'confirm' }>; onC
         <button type="button" className="btn ghost" onClick={onClose}>
           Cancel
         </button>
+        {o.other && (
+          <button
+            type="button"
+            className={`btn ${o.other.danger ? 'danger' : ''}`}
+            onClick={() => {
+              onClose();
+              o.other!.run();
+            }}
+          >
+            {o.other.label}
+          </button>
+        )}
         <button
           type="button"
           autoFocus

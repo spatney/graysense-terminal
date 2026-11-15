@@ -16,6 +16,7 @@ mod terminal;
 mod update;
 mod util;
 mod win;
+mod worktree;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,6 +106,7 @@ fn main() {
             commands::terminal_kill,
             commands::window_reveal,
             commands::window_theme,
+            commands::worktree_review,
         ])
         .build(tauri::generate_context!())
         .expect("error while starting Graysense")

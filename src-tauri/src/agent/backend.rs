@@ -66,6 +66,8 @@ pub struct ForkJob {
     /// The message it was forked before (and its attached files), for the new session's message box.
     pub text: Option<String>,
     pub files: Vec<String>,
+    /// The folder the new session works in (None: the original's), like a worktree of its own.
+    pub cwd: Option<PathBuf>,
 }
 
 pub struct AgentSpec {
@@ -87,6 +89,9 @@ pub struct AgentSpec {
     pub memory: Option<AgentMemory>,
     /// Record the files the agent changes (for rewinding a turn along with its files).
     pub track_files: bool,
+    /// Added to the agent's system message (about the worktree it works in, say), for new and
+    /// resumed sessions alike.
+    pub instructions: Option<String>,
 }
 
 /// What a model switch does to one of the session's settings (thinking effort, context window).
@@ -994,6 +999,9 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
         if let Some(hooks) = hooks {
             config = config.with_hooks(hooks);
         }
+        if let Some(text) = spec.instructions.clone() {
+            config = config.with_system_message(github_copilot_sdk::SystemMessageConfig::new().with_mode("append").with_content(text));
+        }
         config.tools = Some(tools);
         config.canvases = Some(crate::canvas::declarations());
         client.prepare_resume_session(config).map_err(|e| e.to_string())?
@@ -1034,6 +1042,9 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
         }
         if let Some(tier) = spec.context_tier.clone() {
             config = config.with_context_tier(tier);
+        }
+        if let Some(text) = spec.instructions.clone() {
+            config = config.with_system_message(github_copilot_sdk::SystemMessageConfig::new().with_mode("append").with_content(text));
         }
         client.prepare_session(config).map_err(|e| e.to_string())?
     };

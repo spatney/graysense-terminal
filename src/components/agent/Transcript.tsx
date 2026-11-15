@@ -686,7 +686,19 @@ const UserTurnView = memo(function UserTurnView({
           </button>
         )}
         {sessionId && it.eventId && (
-          <button type="button" className="icon-btn sm" data-tip="Fork a new session from here" onClick={() => void act({ type: 'fork', bay: bayId, index: i })}>
+          <button
+            type="button"
+            className="icon-btn sm"
+            data-tip="Fork a new session from here"
+            onClick={() => void act({ type: 'fork', bay: bayId, index: i })}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              showMenu(e, [
+                { label: 'Fork into a new session', icon: 'repo-forked', onSelect: () => void act({ type: 'fork', bay: bayId, index: i }) },
+                { label: 'Fork into a worktree', icon: 'git-branch', tip: 'The copy works in a worktree of its own, so the two sessions don’t change the same files', onSelect: () => void act({ type: 'fork', bay: bayId, index: i, worktree: true }) },
+              ]);
+            }}
+          >
             <Icon name="repo-forked" />
           </button>
         )}
