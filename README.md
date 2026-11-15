@@ -35,6 +35,24 @@ signed in (`copilot login`).
   `/rename`, `/learn`, `/clear`, `/stop`, `/terminal`, `/new`).
 - **Steer the agent while it works**: Enter sends a message that Copilot reads at its next step,
   without waiting for the turn to finish. Ctrl+Enter queues it for after the turn instead.
+- **Undo, edit and retry**: hover one of your messages to **edit and send it again** or **undo from
+  here** (the conversation goes back to just before it, and the message returns to the message
+  box), or **retry** the last answer, on the same model or another. A dialog lists what goes and
+  the files the agent changed since, and puts those files back as they were (files you changed by
+  hand since are left alone). Graysense records the files agents change for this
+  (**Settings > Agents > Track file changes for undo**, on by default).
+- **Fork a conversation** into a new session: all of it from the bay's ⋯ menu, or from any of your
+  messages (the copy stops just before it and puts it in the message box). The fork keeps the
+  model, thinking level, context window and approval choice.
+- **Find in a conversation** (Ctrl+F): matches reach turns that aren't on screen yet, opening the
+  work log or step they're in. Enter and Shift+Enter step through them.
+- **Messages you haven't sent are kept** across restarts and updates, and come back when you
+  reopen the session.
+- **Notifications**: while Graysense is in the background, Windows tells you when an agent
+  finishes, asks a question or needs approval; click the notification to go to that agent
+  (**Settings > Appearance > Desktop notifications**). Incognito sessions only say what happened.
+- **Premium requests left** show in the status bar (it warns under 10%), with the reset date and
+  what the focused session has used in its tooltip.
 - **A model picker with thinking levels and context windows**: models grouped into Powerful,
   Versatile and Fast, with Auto at the top; how hard the model thinks (Auto, Low, Medium, High,
   Extra high, Max, as each model offers them); and, for models that have a long window, how much
@@ -72,6 +90,22 @@ signed in (`copilot login`).
   reads finished conversations); new agents start with what's relevant. Review suggestions,
   edit, pin or delete anything, see where each memory came from, export or import it, and turn
   learning — or all of memory — off. Incognito sessions never read or write memory.
+- **See what an agent was given, and correct it**: the "Used 3 memories" chip under an answer opens
+  into those memories, each with Show, Edit, Pin and **Wrong or outdated** (it's forgotten, with
+  Undo, and agents that were given it are told).
+- **Learns how failures were fixed**: when a step fails and the conversation shows the fix, the
+  fix is saved as a how-to.
+- **Finds memories by other names**: each memory gets a few hidden search words (synonyms, the tool
+  or area it's about), so asking about *the bundler* finds *"Start Vite with…"*.
+- **Where you left off**: when a session's work isn't finished, learning notes the next step.
+  Resuming the session (or reopening one left for more than 12 hours) shows a card with the summary
+  and that step; **Continue** puts it in the message box. New agents in the project are told what
+  was left to do.
+- **Tidies itself**: about once a week (or **Tidy up now** in Memory) the curator merges memories
+  that say the same thing. What you wrote or pinned is only proposed for change, and anything
+  dropped waits in Deleted for 30 days.
+- **Don't learn from a project**: choose it from the session's folder menu or in Memory. Agents
+  there still get your memories.
 
 **Sync to GitHub**
 - Keep your **memories, notes (with their files), missions and a few preferences** in a **private
@@ -117,6 +151,18 @@ signed in (`copilot login`).
 - Each agent has a side panel with its **files** (open the folder in VS Code from there), the
   **changes** it made, and any canvases or apps.
 
+**Worktrees: agents that don't change each other's files**
+- **New agent in a worktree** (the ⌄ menu beside +, the command palette, or a mission's launch
+  options): the session gets a branch (`graysense/<slug>`) and a folder of its own beside the
+  repository (`<repo>.worktrees\<slug>`), made with its first message and named after it.
+  **Fork into a worktree** takes the uncommitted changes along.
+- When it's done, **Merge or open a pull request…** (the branch chip or the bay menu) shows the
+  diff and a commit message. Merging into a branch that's checked out updates its files; a conflict
+  changes nothing. Closing a session with work in its worktree asks whether to keep it.
+- **A warning when agents share a folder**: a new session where another agent is changing files
+  (the same repository, or the same folder outside one) says who, and its home screen offers
+  **Start in a worktree instead**.
+
 **Bays and terminals**
 - Tile agents and terminals in a grid, columns, rows or one at a time; drag tabs to reorder;
   maximize with Ctrl+Shift+Enter.
@@ -154,10 +200,13 @@ signed in (`copilot login`).
 ```
 src-tauri/          Rust: the Graysense core
   src/agent/        Copilot SDK actor (sessions, tools, permissions, canvases, MCP, plugins)
-  src/engine/       UI-agnostic core: bays, actions, learning, and dirty-tracked UI updates
+  src/engine/       UI-agnostic core: bays, actions, learning, rewind, forks, worktrees, and
+                    dirty-tracked UI updates
   src/memory.rs     memory and notes (ranking, relevance, curation, attachments)
   src/sync/         GitHub sync: items and the three-way merge, git transport, AI reconcile
   src/terminal/     PTY service (ConPTY via portable-pty)
+  src/worktree.rs   git worktrees for sessions (make, review, merge, publish, remove)
+  src/notify.rs     Windows notifications
   src/search.rs     search index over sessions and session files
   src/update.rs     Velopack updater (draft-aware GitHub releases source)
 src/                React + TypeScript UI (Vite)
