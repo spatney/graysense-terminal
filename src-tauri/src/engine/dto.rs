@@ -1333,6 +1333,7 @@ mod tests {
             output: String::new(),
             result: Some(result.into()),
             error: None,
+            exit_code: None,
             files: Vec::new(),
             lines: None,
             started: Instant::now(),
