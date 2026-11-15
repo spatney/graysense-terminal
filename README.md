@@ -164,6 +164,7 @@ src/                React + TypeScript UI (Vite)
   components/       shell, agent bay (transcript, composer, prompts, dock), terminal, panels
   lib/              store (applies core updates), API, notes ranking, theming
 scripts/            release.ps1 (build, sign, package, publish), render-assets.ps1 (icons)
+.github/workflows/  ci.yml (tests), release.yml (the release, from a version tag)
 ```
 
 The core runs on its own thread: backend events in, batched UI updates out (only what changed;
@@ -189,11 +190,30 @@ without GitHub.
 
 ## Release
 
+GitHub Actions makes the releases (`.github/workflows/release.yml`):
+
+1. Set the version in `src-tauri/Cargo.toml` (and `Cargo.lock`), `package.json` (and its lock) and
+   `tauri.conf.json`, add a `## <version> — <date>` section to `CHANGELOG.md`, commit and push to
+   `main`.
+2. Tag that commit and push the tag: `git tag v<version>; git push origin v<version>`. The workflow
+   runs the CI checks, builds, signs and publishes the release (about 20 minutes). Its notes are the
+   CHANGELOG section.
+
+To try the pipeline without releasing, run **Actions › Release › Run workflow** with mode
+`dry-run`: it builds and signs, and attaches the packages to the run. Mode `publish` (or `draft`)
+makes the release for the version in `Cargo.toml` straight from `main`, without a tag.
+
+Packages are made with [Velopack](https://velopack.io) and signed with Azure Artifact Signing, as
+the service principal in these repository secrets (it needs the *Artifact Signing Certificate
+Profile Signer* role on the `rayfinfabricator` signing account): `AZURE_SIGNING_CLIENT_ID`,
+`AZURE_SIGNING_CLIENT_SECRET` and `AZURE_SIGNING_TENANT_ID`. The secret is a client secret of the
+`rayfin-fabricator-signing-ci` app registration, made for this repository; it expires on the date
+`az ad app credential list --id <client id>` shows for `graysense-terminal-ci`. To rotate it, add a
+new one (without replacing the others, which rayfin-fabricator uses) and set the secret again:
+
 ```powershell
-pwsh scripts\release.ps1          # build, sign, package and publish v<version>
-pwsh scripts\release.ps1 -Draft   # publish as a draft to look over first
+az ad app credential reset --id <client id> --append --display-name graysense-terminal-ci --years 1
 ```
 
-The version comes from `src-tauri/Cargo.toml` (keep `package.json` and `tauri.conf.json` in step)
-and the notes from its `CHANGELOG.md` section. Packages are made with [Velopack](https://velopack.io)
-and signed with Azure Artifact Signing using your Azure CLI sign-in (`az login`).
+`pwsh scripts\release.ps1` makes a release by hand the same way (`-Draft` to look it over first,
+`-NoUpload` to only build the packages), signing in with your Azure CLI login (`az login`).

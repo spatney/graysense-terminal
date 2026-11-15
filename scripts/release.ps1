@@ -13,12 +13,17 @@
       4. vpk pack: Graysense-win-Setup.exe, a portable zip, the update packages and the feed
          (releases.win.json) that installed copies read. Every executable is signed with Azure
          Artifact Signing (signtool and Microsoft's Azure.CodeSigning.Dlib come with vpk), using
-         your Azure CLI sign-in (az login), which needs the "Artifact Signing Certificate Profile
-         Signer" role on the signing account.
+         your Azure CLI sign-in (az login) or, on a build server, the service principal in
+         AZURE_CLIENT_ID, AZURE_CLIENT_SECRET and AZURE_TENANT_ID. Either needs the "Artifact
+         Signing Certificate Profile Signer" role on the signing account.
       5. vpk upload github: creates the v<version> tag and release at the current commit.
 
-    Needs Node.js, Rust, the GitHub CLI signed in with access to the repo, the Azure CLI signed in
-    (unless -NoSign), the .NET 8 runtime or later, and the commit being released pushed to GitHub.
+    Needs Node.js, Rust, the GitHub CLI signed in with access to the repo (or GH_TOKEN), the Azure
+    sign-in above (unless -NoSign), the .NET 8 runtime or later, and the commit being released
+    pushed to GitHub.
+
+    Releases normally come from GitHub Actions (.github/workflows/release.yml), which builds, then
+    runs this script with -SkipBuild. Running it here does the same by hand.
 
 .PARAMETER Draft
     Leave the release as a draft to look over first. Installed copies ignore drafts.
@@ -80,19 +85,34 @@ $OutDir = if ($OutDir) { [IO.Path]::GetFullPath((Join-Path $root $OutDir)) } els
 $dist = Join-Path $root 'target\dist'
 
 # --- Checks before anything is built or published.
+# A build server signs in to GitHub with a token in the environment, and to Azure as a service principal.
+$githubToken = if ($env:GH_TOKEN) { $env:GH_TOKEN } elseif ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { $null }
+$azurePrincipal = [bool]($env:AZURE_CLIENT_ID -and $env:AZURE_CLIENT_SECRET -and $env:AZURE_TENANT_ID)
 if (-not $NoUpload) {
     if ($Version -ne $cargoVersion) { Fail "-Version only makes local test packages. Releases use Cargo.toml's version ($cargoVersion)." }
     if ($NoSign) { Fail 'Releases are signed. -NoSign is for local test packages.' }
-    gh auth status --hostname github.com *> $null
-    if ($LASTEXITCODE) { Fail 'Sign in to the GitHub CLI first: gh auth login' }
+    if (-not $githubToken) {
+        gh auth status --hostname github.com *> $null
+        if ($LASTEXITCODE) { Fail 'Sign in to the GitHub CLI first: gh auth login' }
+    }
     if (git status --porcelain) { Fail 'Commit your changes first: the release is built from, and tagged at, the current commit.' }
     git fetch --quiet origin
     $head = (git rev-parse HEAD).Trim()
     if (-not (git branch -r --contains $head)) { Fail 'Push this commit to GitHub first (git push).' }
-    gh release view $tag --repo $repo *> $null
-    if ($LASTEXITCODE -eq 0) { Fail "$tag is already released. Bump the version (Cargo.toml, package.json, tauri.conf.json) and add a CHANGELOG.md section." }
+    $draft = gh release view $tag --repo $repo --json isDraft --jq '.isDraft' 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        if ($draft -eq 'true' -and $env:GITHUB_ACTIONS) {
+            # A run that failed after the draft was made: start the draft again.
+            Step "Removing the draft $tag an earlier run left"
+            gh release delete $tag --repo $repo --yes | Out-Null
+        } elseif ($draft -eq 'true') {
+            Fail "$tag is already a draft release. Publish it on GitHub, or delete it first: gh release delete $tag --yes"
+        } else {
+            Fail "$tag is already released. Bump the version (Cargo.toml, package.json, tauri.conf.json) and add a CHANGELOG.md section."
+        }
+    }
 }
-if (-not $NoSign) {
+if (-not $NoSign -and -not $azurePrincipal) {
     az account show --only-show-errors *> $null
     if ($LASTEXITCODE) { Fail 'Sign in to the Azure CLI first (az login): signing uses your Azure sign-in.' }
 }
@@ -146,7 +166,7 @@ function Invoke-Vpk {
 Remove-Item $OutDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 if (-not $NoUpload) {
-    $token = (gh auth token --hostname github.com).Trim()
+    $token = if ($githubToken) { $githubToken } else { (gh auth token --hostname github.com).Trim() }
     $latest = gh release list --repo $repo --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName'
     if ($latest) {
         Step "Downloading $latest to build a delta update from it"
@@ -213,6 +233,10 @@ $publish = @(if (-not $Draft) { '--publish' })
 Invoke-Vpk upload github --repoUrl "https://github.com/$repo" --token $token --outputDir $OutDir --releaseName "Graysense $Version" --tag $tag --targetCommitish $head @publish
 
 # The GitHub release page also explains how to install.
+$updates = 'Installed copies keep themselves up to date: new versions download in the background and install when you restart or close Graysense.'
+if ((gh repo view $repo --json isPrivate --jq '.isPrivate') -eq 'true') {
+    $updates += ' This repository is private, so updates sign in with your GitHub CLI login (``gh auth login``).'
+}
 $body = Join-Path $dist 'release-body.md'
 @"
 $(Get-Content $notes -Raw)
@@ -221,7 +245,7 @@ $(Get-Content $notes -Raw)
 
 Download **Graysense-win-Setup.exe** below and run it. Graysense installs for your account (no admin rights needed), adds itself to the Start menu and opens. The installer and app are code-signed; Windows SmartScreen can still ask about a new app while its reputation builds: choose **More info › Run anyway**.
 
-Installed copies keep themselves up to date: new versions download in the background and install when you restart or close Graysense. This repository is private, so updates sign in with your GitHub CLI login (``gh auth login``).
+$updates
 
 Needs Windows 10 or 11 (x64) and the [GitHub Copilot CLI](https://github.com/github/copilot-cli), signed in.
 "@ | Set-Content $body -Encoding utf8

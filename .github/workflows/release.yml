@@ -1,0 +1,132 @@
+name: Release
+
+# Pushing a version tag (v0.3.1) builds, signs and publishes that release. Run the workflow by
+# hand to try the whole pipeline without publishing (a dry run: the signed packages are attached
+# to the run), or to publish the version in Cargo.toml without tagging it first.
+#
+# The work is scripts/release.ps1, the same script that makes a release by hand.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run builds and signs only; draft and publish make the GitHub release for the version in Cargo.toml'
+        type: choice
+        options:
+          - dry-run
+          - draft
+          - publish
+        default: dry-run
+
+# One release at a time; a second waits instead of racing the first.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Build, sign and publish
+    needs: checks
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      # Creates the tag and the release, and uploads the packages.
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          # The release script checks that the commit is on a branch.
+          fetch-depth: 0
+
+      - name: Plan the release
+        id: plan
+        shell: pwsh
+        env:
+          MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          CAN_SIGN: ${{ secrets.AZURE_SIGNING_CLIENT_ID != '' && secrets.AZURE_SIGNING_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_TENANT_ID != '' }}
+        run: |
+          $version = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($env:TAG -and $env:TAG -ne "v$version") {
+            Write-Output "::error::The tag $env:TAG doesn't match the version in src-tauri/Cargo.toml ($version). Bump the version, commit it, and tag that commit."
+            exit 1
+          }
+          if ($env:MODE -ne 'dry-run' -and -not $env:TAG -and $env:GITHUB_REF -ne 'refs/heads/main') {
+            Write-Output "::error::Only main (or a version tag) can be released. Run the workflow from main, or choose dry-run."
+            exit 1
+          }
+          $sign = $env:CAN_SIGN -eq 'true'
+          if ($env:MODE -ne 'dry-run' -and -not $sign) {
+            Write-Output "::error::Releases are signed, and the AZURE_SIGNING_CLIENT_ID, AZURE_SIGNING_CLIENT_SECRET and AZURE_SIGNING_TENANT_ID secrets aren't all set."
+            exit 1
+          }
+          # -SkipBuild: the build has a step of its own below.
+          $flags = @('-SkipBuild')
+          if ($env:MODE -eq 'dry-run') { $flags += '-NoUpload' }
+          if ($env:MODE -eq 'draft') { $flags += '-Draft' }
+          if (-not $sign) { $flags += '-NoSign' }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "mode=$($env:MODE)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "flags=$($flags -join ' ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "Graysense $version ($($env:MODE)$(if (-not $sign) { ', unsigned: no signing secrets' }))" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        # github-copilot-sdk needs Rust 1.94 or newer (edition 2024); stable is past that.
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Graysense
+        # What the release script would build: the web UI, then the release exe.
+        run: npx tauri build --no-bundle -- --locked
+
+      - name: Package, sign and publish
+        shell: pwsh
+        env:
+          # Azure Artifact Signing signs in as this service principal. It needs the "Artifact
+          # Signing Certificate Profile Signer" role on the signing account.
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_SIGNING_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
+        run: ./scripts/release.ps1 ${{ steps.plan.outputs.flags }}
+
+      - name: Attach the packages (dry run)
+        if: steps.plan.outputs.mode == 'dry-run'
+        uses: actions/upload-artifact@v7
+        with:
+          name: graysense-packages
+          path: target/dist/releases/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Link the release
+        if: steps.plan.outputs.mode != 'dry-run'
+        shell: pwsh
+        run: |
+          $url = gh release view "v${{ steps.plan.outputs.version }}" --json url --jq '.url'
+          "Released: $url" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
