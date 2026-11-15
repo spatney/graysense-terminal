@@ -411,13 +411,79 @@ function WorkLog({ turn, agent, now, cwd }: { turn: AgentTurn; agent: AgentDto |
 }
 
 function RecallChip({ item }: { item: RecallItem }) {
+  const [open, setOpen] = useState(false);
   const notes = useUi((s) => item.entries.filter((e) => s.memory.memories.find((m) => m.id === e.id)?.kind === 'note').length);
   const others = item.entries.length - notes;
   const what = [notes ? plural(notes, 'note') : null, others ? plural(others, 'memory', 'memories') : null].filter(Boolean).join(' and ');
   return (
-    <button type="button" className="memory-chip" data-tip={item.entries.map((e) => `• ${e.text.split('\n')[0]}`).join('\n')} onClick={() => item.entries[0] && revealMemory(item.entries[0].id)}>
-      <Icon name={notes && !others ? 'bookmark' : 'lightbulb-sparkle'} /> Used {what}
-    </button>
+    <div className={`recall${open ? ' open' : ''}`}>
+      <button type="button" className="memory-chip" aria-expanded={open} data-tip={open ? undefined : 'What the agent was given'} onClick={() => setOpen((o) => !o)}>
+        <Icon name={notes && !others ? 'bookmark' : 'lightbulb-sparkle'} /> Used {what}
+        <Icon name="chevron-right" className="worklog-caret" />
+      </button>
+      {open && <RecallList item={item} />}
+    </div>
+  );
+}
+
+/** What an agent was given from memory, each with a way to fix it. */
+function RecallList({ item }: { item: RecallItem }) {
+  const memories = useUi((s) => s.memory.memories);
+  return (
+    <ul className="recall-list">
+      {item.entries.map((e) => {
+        const m = memories.find((x) => x.id === e.id);
+        const live = m && m.state !== 'archived';
+        const note = m?.kind === 'note';
+        return (
+          <li key={e.id} className={live ? undefined : 'gone'}>
+            <Icon name={note ? 'bookmark' : 'lightbulb'} />
+            <span className="recall-text selectable">{live ? m.text : e.text}</span>
+            {!live && <span className="recall-status">{m?.archivedReason ?? 'No longer saved'}</span>}
+            <span className="recall-actions">
+              {m && (
+                <button type="button" className="icon-btn sm" data-tip="Show in Memory" aria-label="Show in Memory" onClick={() => revealMemory(e.id)}>
+                  <Icon name="go-to-file" />
+                </button>
+              )}
+              {live && !note && (
+                <button type="button" className="icon-btn sm" data-tip="Edit" aria-label="Edit" onClick={() => revealMemory(e.id, true)}>
+                  <Icon name="edit" />
+                </button>
+              )}
+              {live && m.state === 'active' && m.kind !== 'rule' && (
+                <button
+                  type="button"
+                  className={`icon-btn sm${m.pinned ? ' active' : ''}`}
+                  data-tip={m.pinned ? 'Unpin' : 'Pin: always give agents this'}
+                  aria-label={m.pinned ? 'Unpin' : 'Pin'}
+                  aria-pressed={m.pinned}
+                  onClick={() => void act({ type: 'memoryPin', id: e.id, pinned: !m.pinned })}
+                >
+                  <Icon name={m.pinned ? 'pinned' : 'pin'} />
+                </button>
+              )}
+              {live && !note && (
+                <button
+                  type="button"
+                  className="icon-btn sm"
+                  data-tip="Wrong or outdated: forget it, and tell the agent"
+                  aria-label="Wrong or outdated"
+                  onClick={() => void act({ type: 'memoryFlag', id: e.id })}
+                >
+                  <Icon name="thumbsdown" />
+                </button>
+              )}
+              {m?.state === 'archived' && m.archivedReason === 'Marked wrong' && (
+                <button type="button" className="btn ghost sm" onClick={() => void act({ type: 'memoryRestore', id: e.id })}>
+                  Undo
+                </button>
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

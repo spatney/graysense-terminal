@@ -725,6 +725,7 @@ export type Action =
   | { type: 'memoryEdit'; id: number; text: string; kind: MemoryKind; project: string | null }
   | { type: 'memoryPin'; id: number; pinned: boolean }
   | { type: 'memoryArchive'; id: number }
+  | { type: 'memoryFlag'; id: number }
   | { type: 'memoryRestore'; id: number }
   | { type: 'memoryPurge'; id: number }
   | { type: 'memoryAccept'; id: number }

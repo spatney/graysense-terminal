@@ -69,10 +69,10 @@ export async function restartToUpdate() {
   }
 }
 
-/** Open Memory on one memory or note, scrolled to it and highlighted. */
-export function revealMemory(id: number) {
+/** Open Memory on one memory or note, scrolled to it and highlighted (and opened for editing). */
+export function revealMemory(id: number, edit = false) {
   void setSide('memory');
-  useUi.setState({ revealMemory: id });
+  useUi.setState({ revealMemory: id, revealEdit: edit });
 }
 
 /** Save something to notes from anywhere: a small capture window, prefilled. */

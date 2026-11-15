@@ -422,7 +422,10 @@ export function MemoryPanel() {
       setFilter(homeFilter(m));
     }
     setFlash((f) => ({ id: m.id, n: (f?.n ?? 0) + 1 }));
-    useUi.setState({ revealMemory: null });
+    if (useUi.getState().revealEdit && m.state !== 'archived') {
+      setDraft({ id: m.id, text: m.proposal || m.text, kind: m.kind, scope: m.project, scopeTouched: true, error: null, saving: false });
+    }
+    useUi.setState({ revealMemory: null, revealEdit: false });
   }, [reveal, mem.memories]);
 
   // Scroll a flashed memory into view (below the toolbar), and let the highlight fade.

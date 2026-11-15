@@ -893,7 +893,7 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
     let hooks: Option<Arc<dyn github_copilot_sdk::hooks::SessionHooks>> = spec
         .memory
         .clone()
-        .map(|m| Arc::new(MemoryHooks { bay, ui: ui.clone(), memory: m, shown: Default::default(), started: AtomicBool::new(false) }) as Arc<dyn github_copilot_sdk::hooks::SessionHooks>);
+        .map(|m| Arc::new(MemoryHooks { bay, ui: ui.clone(), memory: m, shown: Default::default(), corrected: Default::default(), started: AtomicBool::new(false) }) as Arc<dyn github_copilot_sdk::hooks::SessionHooks>);
     let tools = graysense_tools(bay, ui.clone(), spec.memory.clone(), client.clone(), self_tx);
     let prepared = if let Some(id) = spec.resume.clone() {
         let mut config = ResumeSessionConfig::new(SessionId::from(id))
@@ -1799,6 +1799,8 @@ struct MemoryHooks {
     ui: UiTx,
     memory: AgentMemory,
     shown: parking_lot::Mutex<HashSet<crate::memory::MemoryId>>,
+    /// Memories given earlier that the agent has since been told are wrong.
+    corrected: parking_lot::Mutex<HashSet<crate::memory::MemoryId>>,
     started: AtomicBool,
 }
 
@@ -1822,7 +1824,7 @@ impl github_copilot_sdk::hooks::SessionHooks for MemoryHooks {
             shown.extend(included);
             shown.clone()
         };
-        let (mut block, ids, saved) = {
+        let (mut block, ids, saved, wrong) = {
             let store = self.memory.store.lock();
             let saved = store.captured_from(&input.prompt).map(|m| m.text.clone());
             let (block, ids) = if !crate::memory::sharing() {
@@ -1832,7 +1834,10 @@ impl github_copilot_sdk::hooks::SessionHooks for MemoryHooks {
             } else {
                 store.followup_for(project, asked, &skip, 3)
             };
-            (block, ids, saved)
+            // What it was given that the user has since marked wrong, said once.
+            let mut corrected = self.corrected.lock();
+            let wrong: Vec<String> = skip.iter().filter_map(|id| store.get(*id).filter(|m| m.is_flagged() && corrected.insert(*id)).map(|m| m.text.clone())).collect();
+            (block, ids, saved, wrong)
         };
         if !ids.is_empty() {
             let entries = {
@@ -1844,6 +1849,13 @@ impl github_copilot_sdk::hooks::SessionHooks for MemoryHooks {
             self.ui.send(Evt::Recalled { bay: self.bay, entries });
         } else {
             block.clear();
+        }
+        if !wrong.is_empty() {
+            let list: Vec<String> = wrong.iter().map(|t| format!("- {t}")).collect();
+            block.push_str(&format!(
+                "\n<graysense_memory_correction>\nThe user marked these notes Graysense gave you earlier as wrong or outdated. Don't rely on them:\n{}\n</graysense_memory_correction>",
+                list.join("\n")
+            ));
         }
         // Graysense saves "remember that …" itself the moment it's sent; keep the agent from
         // storing a second, differently worded copy.

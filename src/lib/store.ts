@@ -63,6 +63,8 @@ interface UiState {
   dock: Record<BayId, DockState>;
   /** Memory to scroll to and highlight in the Memory panel. */
   revealMemory: number | null;
+  /** Open the revealed memory for editing too. */
+  revealEdit: boolean;
   /** Ask the missions panel to focus its capture box. */
   captureTick: number;
   /** Focus a bay's composer (bumped to re-trigger). */
@@ -96,6 +98,7 @@ export const useUi = create<UiState>(() => ({
   drafts: {},
   dock: {},
   revealMemory: null,
+  revealEdit: false,
   captureTick: 0,
   focusTick: {},
 }));

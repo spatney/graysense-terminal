@@ -93,6 +93,8 @@ pub enum Action {
     MemoryEdit { id: u64, text: String, kind: String, project: Option<String> },
     MemoryPin { id: u64, pinned: bool },
     MemoryArchive { id: u64 },
+    /// The user says a memory an agent was given is wrong or outdated.
+    MemoryFlag { id: u64 },
     MemoryRestore { id: u64 },
     MemoryPurge { id: u64 },
     MemoryAccept { id: u64 },
@@ -510,6 +512,21 @@ impl Core {
             Action::MemoryArchive { id } => {
                 self.memory.lock().archive(id, "deleted");
                 self.toast_with(Level::Ok, "Memory deleted", Some(("Undo".into(), json!({ "type": "memoryRestore", "id": id }))));
+                ok
+            }
+            Action::MemoryFlag { id } => {
+                let mut store = self.memory.lock();
+                if !store.get(id).is_some_and(|m| m.state != MemoryState::Archived) {
+                    return Err("That memory is no longer saved.".into());
+                }
+                // Agents that were given it hear so with the next message (MemoryHooks).
+                store.archive(id, "flagged");
+                drop(store);
+                self.toast_with(
+                    Level::Ok,
+                    "Forgotten, and learning won't save it again. Agents that used it are told with your next message.",
+                    Some(("Undo".into(), json!({ "type": "memoryRestore", "id": id }))),
+                );
                 ok
             }
             Action::MemoryRestore { id } => {

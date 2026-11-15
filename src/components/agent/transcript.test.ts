@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from '../../lib/api';
 import { applyUpdate, useUi } from '../../lib/store';
-import type { AgentDto, BayDto, ItemDto, ToolDto } from '../../lib/types';
+import type { AgentDto, BayDto, ItemDto, MemoryDto, ToolDto } from '../../lib/types';
 import { Transcript, group } from './Transcript';
 
 vi.mock('../../lib/api', async (original) => ({ ...(await original<typeof import('../../lib/api')>()), act: vi.fn() }));
@@ -193,5 +193,63 @@ describe('rewinding', () => {
     const { drafts, focusTick } = useUi.getState();
     expect(drafts).toEqual({ 1: 'redo this\n\nhalf a thought', 2: 'redo this', 3: 'new' });
     expect(focusTick[1]).toBe(1);
+  });
+});
+
+describe('what an agent was given from memory', () => {
+  const memory = (id: number, text: string, patch: Partial<MemoryDto> = {}): MemoryDto => ({
+    id, kind: 'fact', kindLabel: 'Fact', project: null, projectName: null, text, state: 'active', origin: 'learned',
+    confidence: 0.9, pinned: false, proposal: null, created: 0, updated: 0, lastUsed: null, uses: 1, reinforced: 0,
+    sources: [], history: [], commands: [], stale: false, userOwned: false, archivedReason: null, attachments: [],
+    votes: 0, opens: 0, lastOpened: null, relevance: 0, ...patch,
+  });
+  const bay: BayDto = {
+    id: 1, kind: 'agent', title: 'Test', cwd: 'C:\\repo', folder: 'repo', shell: null,
+    agent: {
+      sessionId: 'test', model: null, effort: null, contextTier: null, mode: 'interactive',
+      status: { kind: 'idle', label: 'Ready', detail: null, busy: false, attention: false },
+      intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
+      context: null, toolCount: 0, turns: 1, changedFiles: [], busySince: null, mission: null,
+      canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null,
+    },
+  };
+  const items: ItemDto[] = [
+    { type: 'user', text: 'start the api', files: [] },
+    { type: 'recall', entries: [{ id: 1, text: 'The API listens on port 8080' }, { id: 2, text: 'Tests need Docker' }, { id: 3, text: 'Uses yarn' }] },
+    { type: 'assistant', text: 'Started.', done: true },
+  ];
+  const tips = (tip: string) => Array.from(document.querySelectorAll<HTMLElement>(`[data-tip="${tip}"]`));
+
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.mocked(act).mockReset().mockResolvedValue(null);
+    useUi.setState({
+      memory: {
+        memories: [memory(1, 'The API listens on port 8080'), memory(2, 'Tests need Docker', { pinned: true }), memory(3, 'Uses yarn', { state: 'archived', archivedReason: 'Marked wrong' })],
+        lastRun: null,
+        learning: 0,
+      },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('lists them on demand, with a way to say one is wrong', () => {
+    render(createElement(Transcript, { bay, items, visible: true }));
+    expect(screen.queryByText('Tests need Docker')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Used 3 memories/ }));
+    expect(screen.getByText('Tests need Docker')).toBeTruthy();
+    // Gone ones say why, and only a memory still saved can be flagged.
+    expect(screen.getByText('Marked wrong')).toBeTruthy();
+    expect(tips('Wrong or outdated: forget it, and tell the agent')).toHaveLength(2);
+    fireEvent.click(tips('Wrong or outdated: forget it, and tell the agent')[0]);
+    expect(act).toHaveBeenCalledWith({ type: 'memoryFlag', id: 1 });
+    fireEvent.click(tips('Unpin')[0]);
+    expect(act).toHaveBeenCalledWith({ type: 'memoryPin', id: 2, pinned: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(act).toHaveBeenCalledWith({ type: 'memoryRestore', id: 3 });
   });
 });

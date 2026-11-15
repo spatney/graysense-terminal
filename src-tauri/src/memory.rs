@@ -259,10 +259,16 @@ impl Memory {
         self.origin == Origin::User || self.history.iter().any(|r| r.why == "edited" || r.why == "restored")
     }
 
+    /// The user marked it wrong or outdated (after an agent was given it).
+    pub fn is_flagged(&self) -> bool {
+        self.state == State::Archived && self.history.last().is_some_and(|r| r.why == "flagged")
+    }
+
     /// Why an archived memory was archived, for the Deleted view.
     pub fn archived_reason(&self) -> (&'static str, Option<&str>) {
         match self.history.last().map(|r| r.why.as_str()) {
             Some("deleted") => ("Deleted", None),
+            Some("flagged") => ("Marked wrong", None),
             Some("undone") => ("Undone", None),
             Some("dismissed") => ("Dismissed", None),
             Some("removed") => ("Removed", None),
@@ -397,7 +403,7 @@ pub fn project_key(path: &Path) -> String {
 // ------------------------------------------------------------------ text helpers
 
 /// Archive reasons that mean "the user didn't want this" (as opposed to learning retiring it).
-const REJECTED: &[&str] = &["deleted", "undone", "dismissed", "removed"];
+const REJECTED: &[&str] = &["deleted", "undone", "dismissed", "removed", "flagged"];
 
 const STOP: &[&str] = &[
     "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "is", "are", "be", "it", "this", "that", "use", "uses", "using", "when", "as", "at",
@@ -1742,6 +1748,20 @@ mod tests {
         s.archive(id, "deleted");
         s.purge(id);
         assert_eq!(s.apply(add(), Source::default(), Some(0.85)).saved.len(), 1);
+    }
+
+    #[test]
+    fn a_memory_marked_wrong_is_not_relearned() {
+        let mut s = store();
+        let add = || vec![Op::Add { kind: Kind::Fact, scope: Scope::Global, text: "The API listens on port 8080".into(), confidence: 0.95, evidence: None }];
+        let id = s.apply(add(), Source::default(), Some(0.85)).saved[0].0;
+        s.archive(id, "flagged");
+        assert!(s.get(id).unwrap().is_flagged());
+        let out = s.apply(add(), Source::default(), Some(0.85));
+        assert!(out.saved.is_empty() && out.suggested == 0);
+        // Undo takes the mark back (so agents aren't told it's wrong).
+        s.restore(id);
+        assert!(!s.get(id).unwrap().is_flagged());
     }
 
     #[test]
