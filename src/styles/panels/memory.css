@@ -430,7 +430,6 @@
   transition:
     border-color 0.15s ease,
     background 0.15s ease,
-    box-shadow 0.15s ease,
     opacity 0.15s ease;
 }
 
@@ -471,7 +470,6 @@
   35% {
     border-color: var(--accent);
     background: color-mix(in srgb, var(--accent) 10%, var(--elev));
-    box-shadow: 0 0 0 3px var(--accent-ring);
   }
 }
 
@@ -480,7 +478,6 @@
   35% {
     border-color: var(--accent);
     background: color-mix(in srgb, var(--accent) 10%, var(--elev));
-    box-shadow: 0 0 0 3px var(--accent-ring);
   }
 }
 
@@ -874,14 +871,11 @@
   background: var(--elev);
   box-shadow: var(--shadow-sm);
   animation: popIn 0.16s var(--ease-out) both;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .mem-editor:focus-within {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .mem-editor.mem-invalid {

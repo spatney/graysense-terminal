@@ -18,7 +18,6 @@
   --accent: #7c8cff;
   --accent-2: #b38bff;
   --accent-strong: #6574f4;
-  --accent-grad: linear-gradient(120deg, #4f8dff 0%, #8b7bff 55%, #b46dff 100%);
   --on-accent: #ffffff;
 
   --ok: #3ddc97;
@@ -66,7 +65,6 @@
   --accent: #3fc6ff;
   --accent-2: #5ef0c8;
   --accent-strong: #1fa9e8;
-  --accent-grad: linear-gradient(120deg, #3fa0ff 0%, #3fc6ff 50%, #5ef0c8 100%);
   --on-accent: #02131d;
   --code-bg: #060708;
   --code-surface: #0c0d10;
@@ -90,7 +88,6 @@
   --accent: #35a3ea;
   --accent-2: #46ccb0;
   --accent-strong: #1f8fd6;
-  --accent-grad: linear-gradient(120deg, #2f7fe8 0%, #35a3ea 50%, #46ccb0 100%);
   --on-accent: #ffffff;
   --code-bg: #0a0d13;
   --code-surface: #0f131b;
@@ -114,7 +111,6 @@
   --accent: #4f5bd5;
   --accent-2: #8a4fd5;
   --accent-strong: #4351c9;
-  --accent-grad: linear-gradient(120deg, #3b6fe0 0%, #5b5bd6 55%, #8a4fd5 100%);
   --on-accent: #ffffff;
   --ok: #148a57;
   --warn: #a8740a;
@@ -143,7 +139,8 @@
 
 :root {
   --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
-  --accent-ring: color-mix(in srgb, var(--accent) 42%, transparent);
+  /* Keyboard focus: a crisp neutral outline, so it never reads as a glow or as the accent's "selected". */
+  --focus-ring: color-mix(in srgb, var(--text) 60%, transparent);
   --ok-soft: color-mix(in srgb, var(--ok) 14%, transparent);
   --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
   --danger-soft: color-mix(in srgb, var(--danger) 13%, transparent);

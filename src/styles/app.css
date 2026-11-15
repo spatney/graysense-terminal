@@ -86,8 +86,7 @@
   bottom: 9px;
   width: 2px;
   border-radius: 2px;
-  background: var(--accent-grad);
-  box-shadow: 0 0 10px var(--accent-ring);
+  background: var(--accent);
 }
 
 .rail-btn .count,
@@ -326,7 +325,7 @@
   right: 0;
   top: 0;
   height: 2px;
-  background: var(--accent-grad);
+  background: var(--accent);
 }
 
 .tab.on::before {
@@ -450,8 +449,7 @@
 }
 
 .bays:not(.single) .bay.focused {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
 .bay.hidden {
@@ -567,9 +565,7 @@
   gap: 18px;
   padding: 40px 24px 80px;
   overflow: auto;
-  background:
-    radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%),
-    var(--bg);
+  background: var(--bg);
 }
 
 /* ------------------------------------------------------------------ status bar */

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import type { ItemDto, ToolDto } from '../../lib/types';
-import { group } from './Transcript';
+import { cleanup, render, screen } from '@testing-library/react';
+import { createElement } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { BayDto, ItemDto, ToolDto } from '../../lib/types';
+import { Transcript, group } from './Transcript';
 
 const tool = (label: string, state: ToolDto['state'] = 'ok'): ToolDto => ({
   type: 'tool',
@@ -97,5 +99,29 @@ describe('transcript turns', () => {
     ];
     const blocks = group(items, false, true);
     expect(blocks.map((b) => (b.kind === 'agent' ? b.took : 'user'))).toEqual(['user', 14_000, 'user', null]);
+  });
+});
+
+describe('a live turn', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('says what the agent is doing once while it has no steps yet', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const bay: BayDto = {
+      id: 1, kind: 'agent', title: 'Test', cwd: 'C:\\repo', folder: 'repo', shell: null,
+      agent: {
+        sessionId: 'test', model: null, effort: null, contextTier: null, mode: 'interactive',
+        status: { kind: 'thinking', label: 'Thinking', detail: null, busy: true, attention: false },
+        intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
+        context: null, toolCount: 0, turns: 0, changedFiles: [], busySince: Date.now(), mission: null,
+        canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
+        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [],
+      },
+    };
+    render(createElement(Transcript, { bay, items: [{ type: 'user', text: 'fix the flaky test', files: [] }], visible: true }));
+    expect(screen.getAllByText('Thinking')).toHaveLength(1);
   });
 });

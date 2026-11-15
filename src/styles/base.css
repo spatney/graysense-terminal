@@ -63,7 +63,7 @@ code {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -269,7 +269,6 @@ code {
   user-select: text;
   transition:
     border-color 0.12s ease,
-    box-shadow 0.12s ease,
     background 0.12s ease;
 }
 
@@ -282,7 +281,6 @@ code {
 .textarea:focus,
 .select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
   background: var(--elev);
 }
 
@@ -571,9 +569,8 @@ button.chip:hover {
   margin: 6px 0;
 }
 
-/* Status dot: a soft halo while working. */
+/* Status dot: it breathes while working, a little faster when it needs you. */
 .dot {
-  position: relative;
   width: 8px;
   height: 8px;
   flex: none;
@@ -587,29 +584,12 @@ button.chip:hover {
 
 .dot.busy {
   background: var(--accent);
-}
-
-.dot.busy::after {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  border: 1.5px solid var(--accent);
-  opacity: 0;
-  animation: ping 1.6s var(--ease-out) infinite;
+  animation: breathe 1.6s ease-in-out infinite;
 }
 
 .dot.attention {
   background: var(--warn);
-}
-
-.dot.attention::after {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  border: 1.5px solid var(--warn);
-  animation: ping 1.2s var(--ease-out) infinite;
+  animation: breathe 1.2s ease-in-out infinite;
 }
 
 .dot.error {
@@ -621,14 +601,16 @@ button.chip:hover {
   background: var(--text-faint);
 }
 
-@keyframes ping {
-  0% {
-    transform: scale(0.6);
-    opacity: 0.9;
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
   }
-  100% {
-    transform: scale(1.35);
-    opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.busy,
+  .dot.attention {
+    animation: none;
   }
 }
 

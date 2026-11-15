@@ -23,16 +23,11 @@
   background: var(--elev);
   box-shadow: var(--shadow-sm);
   cursor: text;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .msn-capture:focus-within {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
-  box-shadow:
-    0 0 0 3px var(--accent-soft),
-    var(--shadow-sm);
 }
 
 .msn-capture-input {
@@ -291,8 +286,7 @@
   transition:
     border-color 0.12s ease,
     background 0.12s ease,
-    opacity 0.12s ease,
-    box-shadow 0.12s ease;
+    opacity 0.12s ease;
 }
 
 .msn-card + .msn-card {
@@ -305,7 +299,7 @@
 }
 
 .msn-card:focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -555,10 +549,8 @@ button.msn-chip:hover {
 
 @keyframes msn-flash {
   from {
-    box-shadow: 0 0 0 2px var(--accent-ring);
-  }
-  to {
-    box-shadow: 0 0 0 2px transparent;
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--elev));
   }
 }
 
@@ -568,7 +560,6 @@ button.msn-chip:hover {
   padding: 8px 8px 8px 10px;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
   background: var(--elev);
-  box-shadow: 0 0 0 3px var(--accent-soft);
   cursor: default;
 }
 

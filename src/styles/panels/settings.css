@@ -139,7 +139,7 @@ label.set-row.disabled .set-row-text {
 }
 
 .set-row-link:focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -240,7 +240,6 @@ label.set-row.disabled .set-row-text {
   text-align: left;
   transition:
     border-color 0.12s ease,
-    box-shadow 0.12s ease,
     background 0.12s ease,
     color 0.12s ease;
 }
@@ -253,12 +252,11 @@ label.set-row.disabled .set-row-text {
 
 .set-theme.on {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
   color: var(--text);
 }
 
 .set-theme:focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -394,14 +392,11 @@ label.set-row.disabled .set-row-text {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--elev-2);
-  transition:
-    border-color 0.12s ease,
-    box-shadow 0.12s ease;
+  transition: border-color 0.12s ease;
 }
 
 .set-stepper:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .set-step {
@@ -423,7 +418,7 @@ label.set-row.disabled .set-row-text {
 }
 
 .set-step:focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -535,15 +530,12 @@ label.set-row.disabled .set-row-text {
   align-items: center;
   gap: 12px;
   padding: 16px 12px;
-  border-radius: var(--set-inner-radius) var(--set-inner-radius) 0 0;
-  background: radial-gradient(120% 160% at 0% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%);
 }
 
 .set-about-logo {
   flex: none;
   width: 44px;
   height: 44px;
-  filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent));
 }
 
 .set-about-text {
@@ -666,7 +658,7 @@ label.set-row.disabled .set-row-text {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent-grad);
+  background: var(--accent);
   transition: width 0.3s var(--ease);
 }
 
@@ -725,7 +717,7 @@ label.set-row.disabled .set-row-text {
 }
 
 .set-notes-head:focus-visible {
-  outline: 2px solid var(--accent-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 

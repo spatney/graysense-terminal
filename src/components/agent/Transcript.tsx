@@ -505,13 +505,6 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
           {streaming && <span className="stream-caret" />}
         </div>
       )}
-      {turn.live && agent && !streaming && !prompts.length && !turn.parts.some((p) => p.t === 'step') && (
-        <div className="live-line">
-          <span className="live-orb" />
-          <span className="shimmer">{agent.intent ?? agent.status.label}</span>
-          {agent.busySince && <span className="live-time">{duration(now - agent.busySince)}</span>}
-        </div>
-      )}
       {notices.map((p) => (
         <Notice key={p.i} item={p.item as NoticeItem} count={p.n} />
       ))}

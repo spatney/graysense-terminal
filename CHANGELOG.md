@@ -3,6 +3,17 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.3.1 — 2026-11-14
+
+- **A calmer look, without the glow**: the soft halos around the message box, text boxes,
+  approval cards and the focused session are gone (a plain border shows where you're typing), and
+  so are the light behind the logo, the tinted backdrops on the start page and in About, and the
+  gradients: the accent is one flat color. Busy and waiting dots pulse gently instead of sending
+  out rings, and the outline that shows keyboard focus is a crisp neutral line, so it no longer
+  looks like a glow or like the accent's "selected".
+- **"Thinking" shows once**: when an agent starts on your message, what it's doing and for how
+  long appear on one line until its first step, not on two.
+
 ## 0.3.0 — 2026-11-14
 
 - **Keep your memory in a GitHub repository**: in **Settings › Sync**, connect Graysense to a

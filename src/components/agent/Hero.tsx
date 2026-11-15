@@ -44,7 +44,7 @@ export function Hero({ bay }: { bay: BayDto | null }) {
           <img src="/logo-128.png" alt="" draggable={false} />
         </div>
         <h1>
-          {greeting()}. <span className="grad">What shall we build?</span>
+          {greeting()}. <span className="hero-ask">What shall we build?</span>
         </h1>
         <p>{agent?.incognito ? 'Incognito: this session won’t use or add to memory.' : 'Copilot can plan, write and run code, and remember what you teach it.'}</p>
         {where && (

@@ -548,11 +548,6 @@
   border-color: color-mix(in srgb, var(--danger) 70%, var(--border-strong));
 }
 
-.mcp-field.invalid .input:focus,
-.mcp-field.invalid .textarea:focus {
-  box-shadow: 0 0 0 3px var(--danger-soft);
-}
-
 .mcp-inline {
   display: flex;
   gap: 6px;

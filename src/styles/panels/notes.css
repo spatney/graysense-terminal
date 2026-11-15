@@ -16,14 +16,11 @@
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   background: var(--elev);
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .nts-capture:focus-within {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .nts-capture.dropping {
@@ -161,9 +158,8 @@
   height: 30px;
   flex: none;
   border-radius: 50%;
-  background: var(--accent-grad);
-  color: #fff;
-  box-shadow: 0 0 16px var(--accent-ring);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .nts-ask-orb .codicon {
@@ -238,10 +234,7 @@
   0%,
   35% {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-ring);
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
+    background: color-mix(in srgb, var(--accent) 10%, var(--elev));
   }
 }
 
