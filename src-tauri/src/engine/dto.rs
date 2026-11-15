@@ -47,6 +47,104 @@ pub fn clip_head(s: &str, max: usize) -> String {
     format!("{}\n… ({} more characters)", &s[..end], s.len() - end)
 }
 
+/// `s` cut to at most `max` bytes at the end of a line, and whether it was cut.
+fn clip_lines(s: &str, max: usize) -> (&str, bool) {
+    if s.len() <= max {
+        return (s, false);
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&s[..s[..end].rfind('\n').unwrap_or(end)], true)
+}
+
+/// A tool's result as a transcript diff, when it is a unified diff (as the edit tools report).
+/// `counted` is the tool's own count of the lines it added and removed, which stands in for the
+/// diff's when the CLI cut the diff short.
+fn diff_dto(result: &str, counted: Option<(u32, u32)>) -> Option<DiffDto> {
+    // Only newlines are trimmed: a last context line can be a lone space (an empty line).
+    let text = result.trim_start_matches(['\r', '\n']).trim_end_matches(['\r', '\n']);
+    let (text, cut) = match cli_head(text) {
+        Some(head) => (head, true),
+        None => (text, false),
+    };
+    let (added, removed) = diff_stat(text)?;
+    let (added, removed) = if cut { counted.unwrap_or((added, removed)) } else { (added, removed) };
+    let (text, clipped) = clip_lines(text, MAX_OUTPUT);
+    let text = if clipped { without_cut_header(text) } else { text };
+    Some(DiffDto { text: text.to_owned(), truncated: cut || clipped, added, removed })
+}
+
+/// What's left of a result the CLI cut short (keeping its first few KB and ending it with
+/// "[Truncated — full output (27.5 KB) temporarily saved to …]"), without that note, the line the
+/// cut went through or a file whose header it went through; None when `text` wasn't cut.
+fn cli_head(text: &str) -> Option<&str> {
+    let (head, note) = text.rsplit_once('\n')?;
+    if !(note.starts_with("[Truncated") && note.trim_end().ends_with(']')) {
+        return None;
+    }
+    let head = head.trim_end_matches(['\r', '\n']).rsplit_once('\n').map_or("", |(whole, _)| whole);
+    Some(without_cut_header(head))
+}
+
+/// A cut diff without its last file when the cut went through that file's header (it has no hunk),
+/// so a cut diff always ends partway through a file it names.
+fn without_cut_header(diff: &str) -> &str {
+    match diff.rfind("\ndiff --git ") {
+        Some(i) if !diff[i..].contains("\n@@ ") => &diff[..i],
+        _ => diff,
+    }
+}
+
+/// The lines a unified diff adds and removes; None when it has no hunks. A hunk's lines are read
+/// by its header's counts, so a removed "-- note" line ("--- note") isn't taken for a file header.
+fn diff_stat(diff: &str) -> Option<(u32, u32)> {
+    let (mut added, mut removed, mut hunks) = (0, 0, 0);
+    let (mut old_left, mut new_left) = (0u32, 0u32);
+    for line in diff.lines() {
+        if old_left > 0 || new_left > 0 {
+            match line.bytes().next() {
+                Some(b'+') => {
+                    added += 1;
+                    new_left = new_left.saturating_sub(1);
+                    continue;
+                }
+                Some(b'-') => {
+                    removed += 1;
+                    old_left = old_left.saturating_sub(1);
+                    continue;
+                }
+                // The tools trim trailing spaces, so an empty context line can come without its space.
+                Some(b' ') | None => {
+                    old_left = old_left.saturating_sub(1);
+                    new_left = new_left.saturating_sub(1);
+                    continue;
+                }
+                Some(b'\\') => continue,
+                _ => {}
+            }
+        }
+        if let Some((old, new)) = hunk_counts(line) {
+            old_left = old;
+            new_left = new;
+            hunks += 1;
+        }
+    }
+    (hunks > 0).then_some((added, removed))
+}
+
+/// A hunk header's old and new line counts ("@@ -12,6 +12,8 @@ fn main" → (6, 8)).
+fn hunk_counts(line: &str) -> Option<(u32, u32)> {
+    let (ranges, _) = line.strip_prefix("@@ -")?.split_once(" @@")?;
+    let (old, new) = ranges.split_once(" +")?;
+    let count = |range: &str| match range.split_once(',') {
+        Some((start, n)) => start.parse::<u32>().ok().and(n.parse().ok()),
+        None => range.parse::<u32>().ok().map(|_| 1),
+    };
+    Some((count(old)?, count(new)?))
+}
+
 /// `s` cut to at most `max` bytes (on a character boundary), keeping the end.
 pub fn clip_tail(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -140,12 +238,27 @@ pub struct ToolDto {
     pub output: String,
     pub result: Option<String>,
     pub error: Option<String>,
-    pub files: Vec<String>,
+    /// The files it wrote, as the CLI reports them.
+    pub files: Vec<agent::FileEdit>,
     pub elapsed: Option<f32>,
     pub started: i64,
     pub mcp_server: Option<String>,
     pub has_app: bool,
     pub args: Value,
+    /// What a finished edit or new file changed. Its result is this diff, so `result` is then empty.
+    pub diff: Option<DiffDto>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffDto {
+    /// The tool's unified diff, cut at the end of a line when it's long.
+    pub text: String,
+    /// `text` isn't the whole diff: it was long, or the CLI cut it short.
+    pub truncated: bool,
+    /// Lines the whole diff adds and removes.
+    pub added: u32,
+    pub removed: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -162,6 +275,8 @@ pub struct PermissionDto {
     pub warning: Option<String>,
     pub file_name: Option<String>,
     pub diff: Option<String>,
+    /// `diff` was long, and is cut at the end of a line.
+    pub diff_truncated: bool,
     pub paths: Vec<String>,
     pub url: Option<String>,
     pub server: Option<String>,
@@ -271,6 +386,10 @@ fn permission_dto(p: &agent::PermissionPrompt) -> PermissionDto {
         .map(|p| vec![p])
         .or_else(|| pr.get("paths").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()))
         .unwrap_or_default();
+    let diff = s("diff").filter(|d| !d.is_empty()).map(|d| {
+        let (shown, cut) = clip_lines(&d, 64 * 1024);
+        (shown.to_owned(), cut)
+    });
     PermissionDto {
         what,
         summary,
@@ -279,7 +398,8 @@ fn permission_dto(p: &agent::PermissionPrompt) -> PermissionDto {
         command: s("fullCommandText").map(|c| clip_head(&c, MAX_ARG)),
         warning: s("warning"),
         file_name: s("fileName"),
-        diff: s("diff").filter(|d| !d.is_empty()).map(|d| clip_head(&d, 64 * 1024)),
+        diff_truncated: diff.as_ref().is_some_and(|(_, cut)| *cut),
+        diff: diff.map(|(d, _)| d),
         paths,
         url: s("url"),
         server: s("serverName"),
@@ -300,10 +420,12 @@ pub fn item_dto(item: &Item) -> ItemDto {
         Item::Reasoning { text, done, .. } => ItemDto::Reasoning { text: text.clone(), done: *done },
         Item::Tool(c) => {
             let target = agent::tool_target(&c.name, &c.args);
+            let family = tool_family(&c.name);
+            let diff = c.result.as_deref().filter(|_| c.state == ToolState::Ok && matches!(family, "edit" | "create")).and_then(|r| diff_dto(r, c.lines));
             ItemDto::Tool(Box::new(ToolDto {
                 label: agent::tool_label(c, target.as_deref()),
                 verb: agent::tool_verb(&c.name),
-                family: tool_family(&c.name),
+                family,
                 target,
                 name: c.name.clone(),
                 state: match c.state {
@@ -313,7 +435,7 @@ pub fn item_dto(item: &Item) -> ItemDto {
                 },
                 progress: c.progress.clone(),
                 output: clip_tail(&c.output, MAX_OUTPUT),
-                result: c.result.as_deref().map(|r| clip_head(r, MAX_OUTPUT)),
+                result: if diff.is_some() { None } else { c.result.as_deref().map(|r| clip_head(r, MAX_OUTPUT)) },
                 error: c.error.clone(),
                 files: c.files.clone(),
                 elapsed: c.elapsed,
@@ -321,6 +443,7 @@ pub fn item_dto(item: &Item) -> ItemDto {
                 mcp_server: c.mcp_server.clone(),
                 has_app: c.has_app,
                 args: clip_value(&c.args, MAX_ARG),
+                diff,
             }))
         }
         Item::Permission(p) => ItemDto::Permission(Box::new(permission_dto(p))),
@@ -380,6 +503,7 @@ pub fn fingerprint(item: &Item) -> u64 {
             c.result.as_ref().map(|r| r.len()).hash(&mut h);
             c.error.hash(&mut h);
             c.files.len().hash(&mut h);
+            c.lines.hash(&mut h);
             c.elapsed.map(f32::to_bits).hash(&mut h);
             c.has_app.hash(&mut h);
             c.intention.hash(&mut h);
@@ -1120,5 +1244,69 @@ mod tests {
         // "é" is 2 bytes but 1 UTF-16 unit; "🐟" is 4 bytes and 2 units.
         assert_eq!(utf16_ranges("é ab", &[3..5]), vec![(2, 4)]);
         assert_eq!(utf16_ranges("🐟x", &[4..5]), vec![(2, 3)]);
+    }
+
+    fn tool_card(name: &str, state: ToolState, result: &str) -> Item {
+        Item::Tool(Box::new(agent::ToolCard {
+            name: name.into(),
+            title: None,
+            intention: None,
+            args: Value::Null,
+            mcp_server: None,
+            state,
+            progress: None,
+            output: String::new(),
+            result: Some(result.into()),
+            error: None,
+            files: Vec::new(),
+            lines: None,
+            started: Instant::now(),
+            elapsed: Some(0.2),
+            has_app: false,
+            stream: None,
+        }))
+    }
+
+    #[test]
+    fn an_edit_sends_its_result_once_as_a_counted_diff() {
+        // As the edit tool reports it: a leading newline, absolute paths, and a removed "-- note" line.
+        let diff = "\ndiff --git a/C:/app/q.sql b/C:/app/q.sql\nindex 0000000..0000000 100644\n--- a/C:/app/q.sql\n+++ b/C:/app/q.sql\n@@ -1,3 +1,3 @@\n select 1;\n--- note\n+-- a better note\n select 2;\n";
+        let ItemDto::Tool(t) = item_dto(&tool_card("edit", ToolState::Ok, diff)) else { panic!("expected a tool") };
+        let d = t.diff.as_ref().expect("a diff");
+        assert_eq!((d.added, d.removed, d.truncated), (1, 1, false));
+        assert!(d.text.starts_with("diff --git") && d.text.ends_with("select 2;"));
+        assert!(t.result.is_none());
+        // A summary isn't a diff, a shell's output is never taken for one, and a failed edit has none.
+        for (name, state, result) in [("edit", ToolState::Ok, "File C:\\app\\q.sql updated with changes."), ("powershell", ToolState::Ok, diff), ("edit", ToolState::Failed, diff)] {
+            let ItemDto::Tool(t) = item_dto(&tool_card(name, state, result)) else { panic!("expected a tool") };
+            assert!(t.diff.is_none() && t.result.is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_long_diff_is_cut_at_a_line_end_and_counted_whole() {
+        let lines: String = (0..5000).map(|i| format!("+line {i}\n")).collect();
+        let d = diff_dto(&format!("--- a/dev/null\n+++ b/C:/app/big.txt\n@@ -1,0 +1,5000 @@\n{lines}"), None).expect("a diff");
+        assert!(d.truncated && d.text.len() <= MAX_OUTPUT);
+        assert!(d.text.lines().last().is_some_and(|l| l.starts_with("+line ")));
+        assert_eq!((d.added, d.removed), (5000, 0));
+    }
+
+    #[test]
+    fn a_diff_the_cli_cut_short_is_marked_and_counted_by_the_cli() {
+        // The CLI keeps the start of a long result, cut mid-line, and says where the rest went.
+        let lines: String = (0..300).map(|i| format!("+line {i}\n")).collect();
+        let whole = format!("diff --git a/C:/app/a.txt b/C:/app/a.txt\ncreate file mode 100644\n--- a/dev/null\n+++ b/C:/app/a.txt\n@@ -1,0 +1,300 @@\n{lines}diff --git a/C:/app/b.txt b/C:/app/b.txt\n--- a/C:/app/b.txt\n+++ b/C:/app/b.txt\n@@ -1 +1 @@\n-b\n+B\n");
+        let note = "\n\n[Truncated — full output (3.1 KB) temporarily saved to C:\\Temp\\1-copilot-tool-output-x.txt]";
+        // Cut inside a line: the half line goes, and the CLI's own counts stand for the diff's.
+        let at = whole.find("+line 50\n").unwrap() + 4;
+        let d = diff_dto(&format!("{}{note}", &whole[..at]), Some((301, 1))).expect("a diff");
+        assert!(d.truncated && d.text.ends_with("\n+line 49"), "{}", &d.text[d.text.len() - 20..]);
+        assert_eq!((d.added, d.removed), (301, 1));
+        // Cut inside the next file's header: that file goes too.
+        let at = whole.find("--- a/C:/app/b.txt").unwrap() + 8;
+        let d = diff_dto(&format!("{}{note}", &whole[..at]), None).expect("a diff");
+        assert!(d.truncated && !d.text.contains("b.txt") && d.text.ends_with("\n+line 299"));
+        assert_eq!((d.added, d.removed), (300, 0));
     }
 }

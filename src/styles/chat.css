@@ -684,7 +684,8 @@
   color: var(--accent);
 }
 
-.diff {
+/* Removed and added lines, before an edit reports its diff (or when a diff can't be read). */
+.line-diff {
   margin: 0;
   max-height: 320px;
   overflow: auto;
@@ -694,26 +695,208 @@
   user-select: text;
 }
 
-.diff div {
+.line-diff div {
   padding: 0 10px;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--code-text);
 }
 
-.diff .add {
-  background: color-mix(in srgb, var(--ok) 13%, transparent);
+.line-diff .add {
+  background: var(--diff-add-bg);
   color: color-mix(in srgb, var(--ok) 70%, var(--text));
 }
 
-.diff .del {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+.line-diff .del {
+  background: var(--diff-del-bg);
   color: color-mix(in srgb, var(--danger) 65%, var(--text));
 }
 
-.diff .hunk {
+.line-diff .hunk {
   color: var(--accent);
   opacity: 0.8;
+}
+
+/* A unified diff, file by file: a head with the file's path, then its numbered, highlighted lines. */
+.diff-view {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--code-surface);
+  overflow: hidden;
+}
+
+.diff-file + .diff-file {
+  border-top: 1px solid var(--border-soft);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 4px 3px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.diff-status {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.diff-status.added {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.diff-status.deleted {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.diff-status.renamed {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.diff-path {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.diff-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+.diff-base {
+  flex: none;
+  font-weight: 600;
+}
+
+/* Lines added and removed ("+12 −3"), on diffs, steps and file chips. */
+.diff-stats {
+  flex: none;
+  display: inline-flex;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-add {
+  color: var(--ok);
+}
+
+.stat-del {
+  color: var(--danger);
+}
+
+.diff-scroll {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--code-text);
+  user-select: text;
+}
+
+.diff-no {
+  width: 1%;
+  min-width: 32px;
+  padding: 0 6px;
+  text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--syn-comment);
+  user-select: none;
+}
+
+.diff-code {
+  padding: 0 12px 0 2px;
+  white-space: pre;
+}
+
+.diff-view.wrap .diff-code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-sign {
+  display: inline-block;
+  width: 14px;
+  color: var(--syn-comment);
+  user-select: none;
+}
+
+.diff-row.add,
+.diff-row.add .diff-no {
+  background: var(--diff-add-bg);
+}
+
+.diff-row.add .diff-sign {
+  color: var(--ok);
+}
+
+.diff-row.del,
+.diff-row.del .diff-no {
+  background: var(--diff-del-bg);
+}
+
+.diff-row.del .diff-sign {
+  color: var(--danger);
+}
+
+.diff-row.meta .diff-code {
+  font-style: italic;
+  color: var(--syn-comment);
+}
+
+.diff-hunk td {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  font-size: 11px;
+  color: var(--syn-comment);
+  background: color-mix(in srgb, var(--syn-key) 8%, transparent);
+}
+
+.diff-hunk-section {
+  color: var(--syn-punct);
+}
+
+.diff-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  padding: 2px 4px 2px 10px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.diff-foot .link-btn {
+  font-size: 11.5px;
 }
 
 .file-chip {
@@ -743,6 +926,108 @@ button.file-chip:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* The files a turn changed: chips that each show what the turn did to their file, below the row. */
+.files-changed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.files-changed-label {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.fc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  color: var(--text);
+  font-size: 12px;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.fc-chip:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.fc-chip:disabled {
+  cursor: default;
+}
+
+.fc-chip .codicon {
+  flex: none;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.fc-chip.created .codicon {
+  color: var(--ok);
+}
+
+.fc-chip.deleted .codicon {
+  color: var(--danger);
+}
+
+.fc-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fc-chip.deleted .fc-chip-name {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.fc-chip.more {
+  padding: 0 8px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fc-chip.open,
+.fc-chip.open:hover {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.fc-chip.open .codicon {
+  color: var(--accent);
+}
+
+/* A chip's diff, opened below the turn's file chips. */
+.file-diff {
+  min-width: 0;
+  animation: fadeIn 0.16s ease both;
+}
+
+.file-diff-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--code-surface);
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 /* ------------------------------------------------------------------ prompt cards */

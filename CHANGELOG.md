@@ -3,6 +3,19 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.3.2 — 2026-11-14
+
+- **Changes shown inline**: an agent's edits now read like a code review. Open an edit or a new
+  file in the work log to see the change itself, with line numbers, the code in color and the
+  added and removed lines marked, and every step says how many lines it added and removed without
+  being opened. A long change shows its first lines and **Show all** for the rest; you can wrap
+  long lines, copy the diff or open the file. Approving an edit shows the same diff first.
+- **Changed files, folded**: the files a turn changed are listed under its answer with their
+  counts, and past four the rest fold into "+N more" (hover it to see them). Click a file to see
+  everything the turn did to it as one diff, even when it was edited several times; when later
+  edits undo earlier ones, it says there's no net change. A change too big to show whole still
+  lists every file it touched, with its counts.
+
 ## 0.3.1 — 2026-11-14
 
 - **A calmer look, without the glow**: the soft halos around the message box, text boxes,

@@ -22,6 +22,7 @@ const tool = (label: string, state: ToolDto['state'] = 'ok'): ToolDto => ({
   mcpServer: null,
   hasApp: false,
   args: {},
+  diff: null,
 });
 
 describe('transcript turns', () => {
@@ -45,7 +46,7 @@ describe('transcript turns', () => {
   it('shows a pending approval as a card, and a live turn before anything arrives', () => {
     const items: ItemDto[] = [
       { type: 'user', text: 'deploy', files: [] },
-      { type: 'permission', kind: 'commands', what: 'Run a command', summary: 'npm run deploy', headline: null, intention: null, command: 'npm run deploy', warning: null, fileName: null, diff: null, paths: [], url: null, server: null, tool: null, toolDescription: null, args: null, canSession: true, pending: true, outcome: null },
+      { type: 'permission', kind: 'commands', what: 'Run a command', summary: 'npm run deploy', headline: null, intention: null, command: 'npm run deploy', warning: null, fileName: null, diff: null, diffTruncated: false, paths: [], url: null, server: null, tool: null, toolDescription: null, args: null, canSession: true, pending: true, outcome: null },
     ];
     const blocks = group(items, true, true);
     const turn = blocks[1];

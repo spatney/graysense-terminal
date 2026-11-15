@@ -3,7 +3,7 @@ import { act, openLink } from '../../lib/api';
 import type { AskItem, ElicitItem, FormField, ItemDto, PermissionDto, PlanItem, Reply, SwitchItem } from '../../lib/types';
 import { Markdown } from '../Markdown';
 import { Icon, Toggle } from '../ui';
-import { UnifiedDiff } from './Transcript';
+import { DiffView } from './DiffView';
 
 export function isPrompt(it: ItemDto): it is PermissionDto | AskItem | ElicitItem | PlanItem | SwitchItem {
   return it.type === 'permission' || it.type === 'ask' || it.type === 'elicit' || it.type === 'plan' || it.type === 'switch';
@@ -13,7 +13,7 @@ function reply(bay: number, index: number, r: Reply) {
   return act({ type: 'reply', bay, index, reply: r });
 }
 
-function Permission({ bay, index, p }: { bay: number; index: number; p: PermissionDto }) {
+function Permission({ bay, index, p, cwd }: { bay: number; index: number; p: PermissionDto; cwd: string | null }) {
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
   const decide = async (decision: 'once' | 'session' | 'reject') => {
@@ -43,8 +43,8 @@ function Permission({ bay, index, p }: { bay: number; index: number; p: Permissi
             <span>{p.warning}</span>
           </div>
         )}
-        {p.fileName && <div className="mono" style={{ fontSize: 12 }}>{p.fileName}</div>}
-        {p.diff && <UnifiedDiff text={p.diff} />}
+        {p.fileName && !p.diff && <div className="mono" style={{ fontSize: 12 }}>{p.fileName}</div>}
+        {p.diff && <DiffView diff={p.diff} cwd={cwd} truncated={p.diffTruncated} openable={false} />}
         {p.paths.map((path) => (
           <div key={path} className="mono selectable" style={{ fontSize: 12 }}>
             {path}
@@ -329,11 +329,11 @@ function Switch({ bay, index, s }: { bay: number; index: number; s: SwitchItem }
   );
 }
 
-/** A prompt waiting for you, inline in the transcript. */
-export function PromptCard({ bay, index, item }: { bay: number; index: number; item: ItemDto }) {
+/** A prompt waiting for you, inline in the transcript. `cwd` is the session's folder, which a proposed change's paths show relative to. */
+export function PromptCard({ bay, index, item, cwd = null }: { bay: number; index: number; item: ItemDto; cwd?: string | null }) {
   switch (item.type) {
     case 'permission':
-      return <Permission bay={bay} index={index} p={item} />;
+      return <Permission bay={bay} index={index} p={item} cwd={cwd} />;
     case 'ask':
       return <Ask bay={bay} index={index} a={item} />;
     case 'elicit':

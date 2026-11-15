@@ -144,6 +144,9 @@
   --ok-soft: color-mix(in srgb, var(--ok) 14%, transparent);
   --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
   --danger-soft: color-mix(in srgb, var(--danger) 13%, transparent);
+  /* Diffs: added and removed lines, tinted from the theme's ok and danger. */
+  --diff-add-bg: color-mix(in srgb, var(--ok) 13%, transparent);
+  --diff-del-bg: color-mix(in srgb, var(--danger) 12%, transparent);
   --hover: color-mix(in srgb, var(--text) 6%, transparent);
   --active: color-mix(in srgb, var(--text) 10%, transparent);
 

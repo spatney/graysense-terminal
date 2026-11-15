@@ -1,22 +1,9 @@
-import hljs from 'highlight.js/lib/common';
 import { memo, useMemo, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { openLink } from '../lib/api';
+import { highlight } from '../lib/highlight';
 import { Icon, copyText } from './ui';
-
-function highlight(code: string, lang: string | undefined): string | null {
-  try {
-    if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
-    if (code.length < 20_000) {
-      const r = hljs.highlightAuto(code);
-      if (r.relevance >= 5) return r.value;
-    }
-  } catch {
-    /* plain text */
-  }
-  return null;
-}
 
 const LANG_NAMES: Record<string, string> = {
   ts: 'TypeScript',

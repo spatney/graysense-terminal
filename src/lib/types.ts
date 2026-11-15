@@ -114,12 +114,30 @@ export interface ToolDto {
   output: string;
   result: string | null;
   error: string | null;
-  files: string[];
+  /** The files it wrote, as the CLI reports them. */
+  files: FileEdit[];
   elapsed: number | null;
   started: number;
   mcpServer: string | null;
   hasApp: boolean;
   args: any;
+  /** What a finished edit or new file changed (its result, which is then null). */
+  diff: ToolDiff | null;
+}
+
+export interface FileEdit {
+  path: string;
+  kind: 'edit' | 'create' | 'delete';
+}
+
+export interface ToolDiff {
+  /** A unified diff, cut at the end of a line when it's long. */
+  text: string;
+  /** `text` isn't the whole diff: it was long, or the CLI cut it short. */
+  truncated: boolean;
+  /** Lines the whole diff adds and removes. */
+  added: number;
+  removed: number;
 }
 
 export interface PermissionDto {
@@ -133,6 +151,8 @@ export interface PermissionDto {
   warning: string | null;
   fileName: string | null;
   diff: string | null;
+  /** `diff` was long, and is cut at the end of a line. */
+  diffTruncated: boolean;
   paths: string[];
   url: string | null;
   server: string | null;

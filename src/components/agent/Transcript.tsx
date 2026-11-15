@@ -1,12 +1,16 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { act, captureNote, revealMemory } from '../../lib/api';
 import { baseName, duration, plural } from '../../lib/format';
+import { langOf } from '../../lib/highlight';
 import { isImagePath } from '../../lib/images';
 import { setDraft, focusComposer, useUi } from '../../lib/store';
-import type { AgentDto, AssistantItem, BayDto, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
+import type { AgentDto, AssistantItem, BayDto, FileEdit, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
 import { ImageThumb } from '../ImageThumb';
 import { CodeBlock, Markdown } from '../Markdown';
 import { Icon, copyText } from '../ui';
+import { filesChanged, missingFrom } from './diff';
+import { DiffView, Stats } from './DiffView';
+import { FilesChanged } from './FilesChanged';
 import { PromptCard, isPrompt } from './Prompts';
 
 // ------------------------------------------------------------------ grouping
@@ -138,19 +142,13 @@ const FAMILY_ICON: Record<ToolDto['family'], string> = {
   other: 'tools',
 };
 
-function langOf(path: string | undefined): string | undefined {
-  const ext = path?.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = { ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', rs: 'rust', py: 'python', ps1: 'powershell', sh: 'bash', md: 'markdown', json: 'json', yml: 'yaml', yaml: 'yaml', toml: 'ini', cs: 'csharp', go: 'go', html: 'xml', css: 'css', sql: 'sql', java: 'java' };
-  return ext ? map[ext] : undefined;
-}
-
-/** old → new as removed and added lines. */
+/** old → new as removed and added lines (before the edit reports its diff). */
 function Diff({ before, after }: { before: string; after: string }) {
   const del = before.split('\n');
   const add = after.split('\n');
   return (
     <div className="well">
-      <div className="diff selectable">
+      <div className="line-diff selectable">
         {del.map((l, i) => (
           <div key={`d${i}`} className="del">
             - {l}
@@ -159,21 +157,6 @@ function Diff({ before, after }: { before: string; after: string }) {
         {add.map((l, i) => (
           <div key={`a${i}`} className="add">
             + {l}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** A unified diff (from a permission request). */
-export function UnifiedDiff({ text }: { text: string }) {
-  return (
-    <div className="well">
-      <div className="diff selectable">
-        {text.split('\n').map((l, i) => (
-          <div key={i} className={l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : ''}>
-            {l || ' '}
           </div>
         ))}
       </div>
@@ -198,22 +181,33 @@ function Well({ title, text, cmd, actions }: { title?: string; text: string; cmd
   );
 }
 
-function FileChips({ files }: { files: string[] }) {
+function FileChips({ files }: { files: FileEdit[] }) {
   if (!files.length) return null;
   return (
     <div className="changed-files">
-      {files.map((f) => (
-        <button key={f} type="button" className="file-chip" data-tip={`${f} · open`} onClick={() => void act({ type: 'openPath', path: f })}>
-          <Icon name="file" /> <span className="ellipsis">{baseName(f)}</span>
-        </button>
-      ))}
+      {files.map(({ path, kind }) =>
+        kind === 'delete' ? (
+          <button key={path} type="button" className="file-chip" disabled data-tip={`${path} · deleted`}>
+            <Icon name="trash" /> <span className="ellipsis">{baseName(path)}</span>
+          </button>
+        ) : (
+          <button key={path} type="button" className="file-chip" data-tip={`${path} · open`} onClick={() => void act({ type: 'openPath', path })}>
+            <Icon name="file" /> <span className="ellipsis">{baseName(path)}</span>
+          </button>
+        ),
+      )}
     </div>
   );
 }
 
-function ToolDetail({ tool }: { tool: ToolDto }) {
+function ToolDetail({ tool, cwd }: { tool: ToolDto; cwd: string | null }) {
   const a = tool.args ?? {};
   const output = tool.output || tool.result || '';
+  // A diff names its files, each with a button to open it; the rest get chips (files past where a long diff was cut).
+  const chips = useMemo(() => {
+    const files: FileEdit[] = tool.files.length ? tool.files : (tool.family === 'edit' || tool.family === 'create' || tool.family === 'read') && a.path ? [{ path: String(a.path), kind: tool.family === 'create' ? 'create' : 'edit' }] : [];
+    return tool.diff ? missingFrom(tool.diff.text, files, cwd) : files;
+  }, [tool.files, tool.family, tool.diff, a.path, cwd]);
   const blocks: React.ReactNode[] = [];
   switch (tool.family) {
     case 'shell':
@@ -221,12 +215,14 @@ function ToolDetail({ tool }: { tool: ToolDto }) {
       if (output) blocks.push(<Well key="out" title="Output" text={output} />);
       break;
     case 'edit':
-      if (a.old_str != null || a.new_str != null) blocks.push(<Diff key="diff" before={String(a.old_str ?? '')} after={String(a.new_str ?? '')} />);
+      if (tool.diff) blocks.push(<DiffView key="diff" diff={tool.diff.text} truncated={tool.diff.truncated} cwd={cwd} />);
+      else if (a.old_str != null || a.new_str != null) blocks.push(<Diff key="diff" before={String(a.old_str ?? '')} after={String(a.new_str ?? '')} />);
       else if (a.input || a.patch) blocks.push(<Well key="patch" title="Patch" text={String(a.input ?? a.patch)} />);
       if (tool.state === 'failed' && output) blocks.push(<Well key="out" title="Result" text={output} />);
       break;
     case 'create':
-      if (a.file_text != null) blocks.push(<CodeBlock key="file" code={String(a.file_text)} lang={langOf(a.path)} maxHeight={320} />);
+      if (tool.diff) blocks.push(<DiffView key="diff" diff={tool.diff.text} truncated={tool.diff.truncated} cwd={cwd} />);
+      else if (a.file_text != null) blocks.push(<CodeBlock key="file" code={String(a.file_text)} lang={langOf(a.path)} maxHeight={320} />);
       break;
     case 'task':
       if (a.prompt) blocks.push(<Markdown key="prompt" className="worklog-note" text={String(a.prompt)} />);
@@ -241,13 +237,12 @@ function ToolDetail({ tool }: { tool: ToolDto }) {
   }
   if (tool.progress && tool.state === 'running') blocks.push(<div key="prog" className="faint">{tool.progress}</div>);
   if (tool.error) blocks.push(<div key="err" className="step-error selectable">{tool.error}</div>);
-  const files = tool.files.length ? tool.files : (tool.family === 'edit' || tool.family === 'create' || tool.family === 'read') && a.path ? [String(a.path)] : [];
-  if (files.length) blocks.push(<FileChips key="files" files={files} />);
+  if (chips.length) blocks.push(<FileChips key="files" files={chips} />);
   if (!blocks.length) blocks.push(<div key="none" className="faint">No details.</div>);
   return <div className="step-detail">{blocks}</div>;
 }
 
-function Step({ part, now }: { part: Part; now: number }) {
+function Step({ part, now, cwd }: { part: Part; now: number; cwd: string | null }) {
   const [open, setOpen] = useState(false);
   const it = part.item;
   if (part.t === 'note' && it.type === 'assistant') {
@@ -262,6 +257,7 @@ function Step({ part, now }: { part: Part; now: number }) {
   let target: string | null = null;
   let meta: string | null = null;
   let metaTip: string | undefined;
+  let stats: React.ReactNode = null;
   let state: 'running' | 'ok' | 'failed' = 'ok';
   let detail: React.ReactNode = null;
   let sub: React.ReactNode = null;
@@ -272,7 +268,8 @@ function Step({ part, now }: { part: Part; now: number }) {
       target = it.target;
       state = it.state;
       meta = it.state === 'running' ? duration(now - it.started) : it.state === 'failed' ? 'failed' : it.elapsed != null && it.elapsed >= 1 ? duration(it.elapsed * 1000) : null;
-      detail = <ToolDetail tool={it} />;
+      if (it.diff) stats = <Stats added={it.diff.added} removed={it.diff.removed} />;
+      detail = <ToolDetail tool={it} cwd={cwd} />;
       break;
     case 'reasoning':
       icon = 'lightbulb';
@@ -333,6 +330,7 @@ function Step({ part, now }: { part: Part; now: number }) {
         <span className="step-ico">{state === 'running' ? <span className="spinner sm" /> : <Icon name={state === 'failed' ? 'error' : icon} />}</span>
         <span className="step-label">{label}</span>
         <span className="step-target">{target}</span>
+        {stats}
         {meta && <span className="step-meta" data-tip={metaTip}>{meta}</span>}
         {detail && <Icon name="chevron-right" className="step-caret" />}
       </button>
@@ -354,7 +352,7 @@ function kinds(steps: Part[]): { icon: string; n: number; tip: string }[] {
   return out.filter((k) => k.n > 0);
 }
 
-function WorkLog({ turn, agent, now }: { turn: AgentTurn; agent: AgentDto | null; now: number }) {
+function WorkLog({ turn, agent, now, cwd }: { turn: AgentTurn; agent: AgentDto | null; now: number; cwd: string | null }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const [all, setAll] = useState(false);
   const steps = turn.parts.filter((p) => p.t === 'step' || p.t === 'note');
@@ -404,7 +402,7 @@ function WorkLog({ turn, agent, now }: { turn: AgentTurn; agent: AgentDto | null
             </button>
           )}
           {shown.map((p) => (
-            <Step key={p.i} part={p} now={now} />
+            <Step key={p.i} part={p} now={now} cwd={cwd} />
           ))}
         </div>
       )}
@@ -463,6 +461,8 @@ interface AgentTurnProps {
   agent: AgentDto | null;
   sessionId: string | null;
   sessionTitle: string;
+  /** The session's folder, which file paths show relative to. */
+  cwd: string | null;
 }
 
 const sameTurn = (a: AgentTurnProps, b: AgentTurnProps) =>
@@ -470,34 +470,35 @@ const sameTurn = (a: AgentTurnProps, b: AgentTurnProps) =>
   a.agent === b.agent &&
   a.sessionId === b.sessionId &&
   a.sessionTitle === b.sessionTitle &&
+  a.cwd === b.cwd &&
   a.turn.live === b.turn.live &&
   a.turn.took === b.turn.took &&
   a.turn.answer?.item === b.turn.answer?.item &&
   a.turn.parts.length === b.turn.parts.length &&
   a.turn.parts.every((p, i) => p.item === b.turn.parts[i].item && p.t === b.turn.parts[i].t && p.n === b.turn.parts[i].n);
 
-const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionId, sessionTitle }: AgentTurnProps) {
+const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionId, sessionTitle, cwd }: AgentTurnProps) {
   const now = useNow(turn.live);
   const prompts = turn.parts.filter((p) => p.t === 'prompt');
   const notices = turn.parts.filter((p) => p.t === 'notice');
   const memories = turn.parts.filter((p) => p.t === 'memory');
   const answer = turn.answer;
   const streaming = answer && !answer.item.done;
-  const changed = turn.live
-    ? []
-    : [
-        ...new Set(
-          turn.parts
-            .map((p) => p.item)
-            .filter((it): it is ToolDto => it.type === 'tool' && (it.family === 'edit' || it.family === 'create') && it.state === 'ok')
-            .flatMap((t) => (t.files.length ? t.files : t.args?.path ? [String(t.args.path)] : [])),
-        ),
-      ];
+  const changed = useMemo(
+    () =>
+      turn.live
+        ? []
+        : filesChanged(
+            turn.parts.map((p) => p.item).filter((it): it is ToolDto => it.type === 'tool'),
+            cwd,
+          ),
+    [turn, cwd],
+  );
   return (
     <div className="turn">
-      <WorkLog turn={turn} agent={agent} now={now} />
+      <WorkLog turn={turn} agent={agent} now={now} cwd={cwd} />
       {prompts.map((p) => (
-        <PromptCard key={p.i} bay={bayId} index={p.i} item={p.item} />
+        <PromptCard key={p.i} bay={bayId} index={p.i} item={p.item} cwd={cwd} />
       ))}
       {answer && (
         <div className="answer">
@@ -508,7 +509,7 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
       {notices.map((p) => (
         <Notice key={p.i} item={p.item as NoticeItem} count={p.n} />
       ))}
-      {changed.length > 0 && <FileChips files={changed} />}
+      {changed.length > 0 && <FilesChanged files={changed} cwd={cwd} />}
       {memories.map((p) => (
         <MemoryChip key={p.i} bay={bayId} i={p.i} item={p.item as MemoryItem | RecallItem} />
       ))}
@@ -664,7 +665,7 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
             b.kind === 'user' ? (
               <UserTurnView key={b.key} bayId={bay.id} it={b.item} sessionId={agent.sessionId} sessionTitle={title} />
             ) : (
-              <AgentTurnView key={b.key} bayId={bay.id} turn={b} agent={b.live ? agent : null} sessionId={agent.sessionId} sessionTitle={title} />
+              <AgentTurnView key={b.key} bayId={bay.id} turn={b} agent={b.live ? agent : null} sessionId={agent.sessionId} sessionTitle={title} cwd={bay.cwd || null} />
             ),
           )}
           {agent.queued.map((m, i) => (

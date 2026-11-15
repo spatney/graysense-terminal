@@ -155,12 +155,30 @@ pub struct ToolCard {
     pub output: String,
     pub result: Option<String>,
     pub error: Option<String>,
-    pub files: Vec<String>,
+    pub files: Vec<FileEdit>,
+    /// The lines the tool added and removed in all, as the CLI counts them (its result can be cut short).
+    pub lines: Option<(u32, u32)>,
     pub started: Instant,
     pub elapsed: Option<f32>,
     pub has_app: bool,
     /// Which event streams the output (some tools send it as both partial results and shell output).
     pub stream: Option<bool>,
+}
+
+/// A file a tool wrote, as the CLI reports it.
+#[derive(Clone, Serialize)]
+pub struct FileEdit {
+    pub path: String,
+    /// "edit", "create" or "delete".
+    pub kind: &'static str,
+}
+
+/// The lines a finished tool added and removed in all, from the CLI's telemetry: a JSON list with
+/// an entry for each kind of file it changed.
+fn line_counts(d: &Value) -> Option<(u32, u32)> {
+    let blocks: Vec<Value> = serde_json::from_str(d.pointer("/toolTelemetry/properties/codeBlocks")?.as_str()?).ok()?;
+    let n = |b: &Value, k: &str| b.get(k).and_then(Value::as_f64).unwrap_or(0.0) as u32;
+    (!blocks.is_empty()).then(|| blocks.iter().fold((0, 0), |(a, r), b| (a + n(b, "linesAdded"), r + n(b, "linesRemoved"))))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -947,6 +965,7 @@ impl AgentView {
                     result: None,
                     error: None,
                     files: Vec::new(),
+                    lines: None,
                     started: Instant::now(),
                     elapsed: None,
                     has_app: false,
@@ -996,8 +1015,19 @@ impl AgentView {
                     card.result = s(&result, "detailedContent").or_else(|| s(&result, "content"));
                     card.error = d.pointer("/error/message").and_then(|v| v.as_str()).map(str::to_owned);
                     if let Some(edits) = d.get("fileEdits").and_then(|v| v.as_array()) {
-                        card.files = edits.iter().filter_map(|e| s(e, "path")).collect();
+                        card.files = edits
+                            .iter()
+                            .filter_map(|e| {
+                                let kind = match e.get("kind").and_then(Value::as_str) {
+                                    Some("create") => "create",
+                                    Some("delete") => "delete",
+                                    _ => "edit",
+                                };
+                                Some(FileEdit { path: s(e, "path")?, kind })
+                            })
+                            .collect();
                     }
+                    card.lines = line_counts(d);
                     if let Some(res) = ui_resource {
                         card.has_app = true;
                         fx.push(Effect::OpenApp(AppRequest {
@@ -1243,6 +1273,28 @@ mod tests {
         v.apply(&ev("3", "tool.shell_output", json!({ "toolCallId": "t", "output": "2026-11-12" })));
         let Some(Item::Tool(card)) = v.items.last() else { panic!("expected a tool card") };
         assert_eq!(card.output, "2026-11-12");
+    }
+
+    #[test]
+    fn a_finished_edit_keeps_the_files_it_wrote_and_its_line_counts() {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.apply(&ev("1", "tool.execution_start", json!({ "toolCallId": "t", "toolName": "apply_patch", "arguments": { "input": "*** Begin Patch" } })));
+        v.apply(&ev(
+            "2",
+            "tool.execution_complete",
+            json!({
+                "toolCallId": "t",
+                "success": true,
+                "result": { "content": "Done", "detailedContent": "diff --git a/C:/app/a.ts b/C:/app/a.ts" },
+                "fileEdits": [{ "path": r"C:\app\a.ts", "kind": "edit" }, { "path": r"C:\app\b.ts", "kind": "create" }, { "path": r"C:\app\c.md", "kind": "delete" }],
+                // One entry for each kind of file, as a JSON string.
+                "toolTelemetry": { "properties": { "codeBlocks": "[{\"fileExt\":\".ts\",\"linesAdded\":120,\"linesRemoved\":7},{\"fileExt\":\".md\",\"linesAdded\":0,\"linesRemoved\":12}]" } },
+            }),
+        ));
+        let Some(Item::Tool(card)) = v.items.last() else { panic!("expected a tool card") };
+        let files: Vec<(&str, &str)> = card.files.iter().map(|f| (f.path.as_str(), f.kind)).collect();
+        assert_eq!(files, [(r"C:\app\a.ts", "edit"), (r"C:\app\b.ts", "create"), (r"C:\app\c.md", "delete")]);
+        assert_eq!(card.lines, Some((120, 19)));
     }
 
     #[test]
