@@ -29,13 +29,78 @@ permissions:
   contents: read
 
 jobs:
+  # Everything that can be known before building: a mistake fails here in seconds, not after the build.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      mode: ${{ steps.plan.outputs.mode }}
+      flags: ${{ steps.plan.outputs.flags }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Plan the release
+        id: plan
+        shell: pwsh
+        env:
+          MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          CAN_SIGN: ${{ secrets.AZURE_SIGNING_CLIENT_ID != '' && secrets.AZURE_SIGNING_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_TENANT_ID != '' }}
+        run: |
+          $version = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $versions = @{ 'package.json' = (Get-Content package.json -Raw | ConvertFrom-Json).version; 'src-tauri/tauri.conf.json' = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version }
+          foreach ($file in $versions.Keys) {
+            if ($versions[$file] -ne $version) {
+              Write-Output "::error::$file says $($versions[$file]) but src-tauri/Cargo.toml says $version. Keep the versions in step."
+              exit 1
+            }
+          }
+          if ($env:TAG -and $env:TAG -ne "v$version") {
+            Write-Output "::error::The tag $env:TAG doesn't match the version in src-tauri/Cargo.toml ($version). Bump the version, commit it, and tag that commit."
+            exit 1
+          }
+          if ($env:MODE -ne 'dry-run') {
+            if (-not $env:TAG -and $env:GITHUB_REF -ne 'refs/heads/main') {
+              Write-Output "::error::Only main (or a version tag) can be released. Run the workflow from main, or choose dry-run."
+              exit 1
+            }
+            if ($env:CAN_SIGN -ne 'true') {
+              Write-Output "::error::Releases are signed, and the AZURE_SIGNING_CLIENT_ID, AZURE_SIGNING_CLIENT_SECRET and AZURE_SIGNING_TENANT_ID secrets aren't all set."
+              exit 1
+            }
+            if (-not (Select-String -Path CHANGELOG.md -Pattern "^## \[?$([regex]::Escape($version))\]?" -Quiet)) {
+              Write-Output "::error::CHANGELOG.md has no '## $version' section: it's the release notes."
+              exit 1
+            }
+            $draft = gh release view "v$version" --repo $env:GITHUB_REPOSITORY --json isDraft --jq '.isDraft' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $draft -ne 'true') {
+              Write-Output "::error::v$version is already released. Bump the version and add a CHANGELOG.md section."
+              exit 1
+            }
+          }
+          # -SkipBuild: the build has a step of its own below.
+          $flags = @('-SkipBuild')
+          if ($env:MODE -eq 'dry-run') { $flags += '-NoUpload' }
+          if ($env:MODE -eq 'draft') { $flags += '-Draft' }
+          if ($env:CAN_SIGN -ne 'true') { $flags += '-NoSign' }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "mode=$($env:MODE)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "flags=$($flags -join ' ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "Graysense $version ($($env:MODE)$(if ($env:CAN_SIGN -ne 'true') { ', unsigned: no signing secrets' }))" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
   checks:
     name: Checks
+    needs: plan
     uses: ./.github/workflows/ci.yml
 
   release:
     name: Build, sign and publish
-    needs: checks
+    needs: [plan, checks]
     runs-on: windows-latest
     timeout-minutes: 60
     permissions:
@@ -50,38 +115,6 @@ jobs:
         with:
           # The release script checks that the commit is on a branch.
           fetch-depth: 0
-
-      - name: Plan the release
-        id: plan
-        shell: pwsh
-        env:
-          MODE: ${{ github.event_name == 'push' && 'publish' || inputs.mode }}
-          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          CAN_SIGN: ${{ secrets.AZURE_SIGNING_CLIENT_ID != '' && secrets.AZURE_SIGNING_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_TENANT_ID != '' }}
-        run: |
-          $version = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          if ($env:TAG -and $env:TAG -ne "v$version") {
-            Write-Output "::error::The tag $env:TAG doesn't match the version in src-tauri/Cargo.toml ($version). Bump the version, commit it, and tag that commit."
-            exit 1
-          }
-          if ($env:MODE -ne 'dry-run' -and -not $env:TAG -and $env:GITHUB_REF -ne 'refs/heads/main') {
-            Write-Output "::error::Only main (or a version tag) can be released. Run the workflow from main, or choose dry-run."
-            exit 1
-          }
-          $sign = $env:CAN_SIGN -eq 'true'
-          if ($env:MODE -ne 'dry-run' -and -not $sign) {
-            Write-Output "::error::Releases are signed, and the AZURE_SIGNING_CLIENT_ID, AZURE_SIGNING_CLIENT_SECRET and AZURE_SIGNING_TENANT_ID secrets aren't all set."
-            exit 1
-          }
-          # -SkipBuild: the build has a step of its own below.
-          $flags = @('-SkipBuild')
-          if ($env:MODE -eq 'dry-run') { $flags += '-NoUpload' }
-          if ($env:MODE -eq 'draft') { $flags += '-Draft' }
-          if (-not $sign) { $flags += '-NoSign' }
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "mode=$($env:MODE)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "flags=$($flags -join ' ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "Graysense $version ($($env:MODE)$(if (-not $sign) { ', unsigned: no signing secrets' }))" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -113,10 +146,10 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_SIGNING_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
-        run: ./scripts/release.ps1 ${{ steps.plan.outputs.flags }}
+        run: ./scripts/release.ps1 ${{ needs.plan.outputs.flags }}
 
       - name: Attach the packages (dry run)
-        if: steps.plan.outputs.mode == 'dry-run'
+        if: needs.plan.outputs.mode == 'dry-run'
         uses: actions/upload-artifact@v7
         with:
           name: graysense-packages
@@ -125,8 +158,8 @@ jobs:
           retention-days: 7
 
       - name: Link the release
-        if: steps.plan.outputs.mode != 'dry-run'
+        if: needs.plan.outputs.mode != 'dry-run'
         shell: pwsh
         run: |
-          $url = gh release view "v${{ steps.plan.outputs.version }}" --json url --jq '.url'
+          $url = gh release view "v${{ needs.plan.outputs.version }}" --json url --jq '.url'
           "Released: $url" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
