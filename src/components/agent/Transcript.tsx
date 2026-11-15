@@ -7,7 +7,7 @@ import { setDraft, focusComposer, useUi } from '../../lib/store';
 import type { AgentDto, AssistantItem, BayDto, FileEdit, ItemDto, MemoryItem, NoticeItem, QueuedMessage, RecallItem, ToolDto, UserItem } from '../../lib/types';
 import { ImageThumb } from '../ImageThumb';
 import { CodeBlock, Markdown } from '../Markdown';
-import { Icon, copyText } from '../ui';
+import { Icon, copyText, showMenu } from '../ui';
 import { filesChanged, missingFrom } from './diff';
 import { DiffView, Stats } from './DiffView';
 import { FilesChanged } from './FilesChanged';
@@ -463,6 +463,8 @@ interface AgentTurnProps {
   sessionTitle: string;
   /** The session's folder, which file paths show relative to. */
   cwd: string | null;
+  /** The message this turn answered, when it can be retried (the last turn, settled). */
+  retry: number | null;
 }
 
 const sameTurn = (a: AgentTurnProps, b: AgentTurnProps) =>
@@ -471,13 +473,14 @@ const sameTurn = (a: AgentTurnProps, b: AgentTurnProps) =>
   a.sessionId === b.sessionId &&
   a.sessionTitle === b.sessionTitle &&
   a.cwd === b.cwd &&
+  a.retry === b.retry &&
   a.turn.live === b.turn.live &&
   a.turn.took === b.turn.took &&
   a.turn.answer?.item === b.turn.answer?.item &&
   a.turn.parts.length === b.turn.parts.length &&
   a.turn.parts.every((p, i) => p.item === b.turn.parts[i].item && p.t === b.turn.parts[i].t && p.n === b.turn.parts[i].n);
 
-const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionId, sessionTitle, cwd }: AgentTurnProps) {
+const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionId, sessionTitle, cwd, retry }: AgentTurnProps) {
   const now = useNow(turn.live);
   const prompts = turn.parts.filter((p) => p.t === 'prompt');
   const notices = turn.parts.filter((p) => p.t === 'notice');
@@ -513,14 +516,28 @@ const AgentTurnView = memo(function AgentTurnView({ bayId, turn, agent, sessionI
       {memories.map((p) => (
         <MemoryChip key={p.i} bay={bayId} i={p.i} item={p.item as MemoryItem | RecallItem} />
       ))}
-      {answer && answer.item.done && (
+      {(answer?.item.done || retry !== null) && (
         <div className="msg-actions">
-          <button type="button" className="icon-btn sm" data-tip="Copy" onClick={() => void copyText(answer.item.text)}>
-            <Icon name="copy" />
-          </button>
-          <button type="button" className="icon-btn sm" data-tip="Save to notes" onClick={() => captureNote({ text: answer.item.text, session: sessionId, title: sessionTitle })}>
-            <Icon name="bookmark" />
-          </button>
+          {answer?.item.done && (
+            <>
+              <button type="button" className="icon-btn sm" data-tip="Copy" onClick={() => void copyText(answer.item.text)}>
+                <Icon name="copy" />
+              </button>
+              <button type="button" className="icon-btn sm" data-tip="Save to notes" onClick={() => captureNote({ text: answer.item.text, session: sessionId, title: sessionTitle })}>
+                <Icon name="bookmark" />
+              </button>
+            </>
+          )}
+          {retry !== null && (
+            <>
+              <button type="button" className="icon-btn sm" data-tip="Retry" onClick={() => void act({ type: 'rewindStart', bay: bayId, index: retry, then: 'retry' })}>
+                <Icon name="refresh" />
+              </button>
+              <button type="button" className="icon-btn sm" data-tip="Retry with another model" onClick={(e) => retryMenu(e.currentTarget, bayId, retry)}>
+                <Icon name="chevron-down" />
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -550,7 +567,22 @@ function UserMessage({ text, files, queued }: { text: string; files: string[]; q
   );
 }
 
-const UserTurnView = memo(function UserTurnView({ bayId, it, sessionId, sessionTitle }: { bayId: number; it: UserItem; sessionId: string | null; sessionTitle: string }) {
+const UserTurnView = memo(function UserTurnView({
+  bayId,
+  i,
+  it,
+  canRewind,
+  sessionId,
+  sessionTitle,
+}: {
+  bayId: number;
+  i: number;
+  it: UserItem;
+  canRewind: boolean;
+  sessionId: string | null;
+  sessionTitle: string;
+}) {
+  const rewindable = canRewind && !!it.eventId;
   return (
     <div className="turn turn--user">
       <UserMessage text={it.text} files={it.files} />
@@ -561,14 +593,23 @@ const UserTurnView = memo(function UserTurnView({ bayId, it, sessionId, sessionT
         <button
           type="button"
           className="icon-btn sm"
-          data-tip="Edit and send again"
+          data-tip={rewindable ? 'Edit and send again' : 'Copy to the message box'}
           onClick={() => {
+            if (rewindable) {
+              void act({ type: 'rewindStart', bay: bayId, index: i, then: 'edit' });
+              return;
+            }
             setDraft(bayId, it.text);
             focusComposer(bayId);
           }}
         >
           <Icon name="edit" />
         </button>
+        {rewindable && (
+          <button type="button" className="icon-btn sm" data-tip="Undo from here" onClick={() => void act({ type: 'rewindStart', bay: bayId, index: i, then: 'undo' })}>
+            <Icon name="discard" />
+          </button>
+        )}
         <button type="button" className="icon-btn sm" data-tip="Save to notes" onClick={() => captureNote({ text: it.text, session: sessionId, title: sessionTitle })}>
           <Icon name="bookmark" />
         </button>
@@ -576,6 +617,28 @@ const UserTurnView = memo(function UserTurnView({ bayId, it, sessionId, sessionT
     </div>
   );
 });
+
+/** Pick a model to retry a message on. */
+function retryMenu(anchor: Element, bay: number, index: number) {
+  const { app, bays } = useUi.getState();
+  const current = bays.find((b) => b.id === bay)?.agent?.model ?? app?.runtimeModel ?? null;
+  const models = app?.models ?? [];
+  showMenu(
+    anchor,
+    [
+      { section: 'Retry with' },
+      ...(models.length
+        ? models.map((m) => ({
+            label: m.name,
+            detail: m.multiplier != null ? `${Number(m.multiplier.toFixed(2))}×` : undefined,
+            checked: m.id === current,
+            onSelect: () => void act({ type: 'rewindStart', bay, index, then: 'retry', model: m.id }),
+          }))
+        : [{ label: 'Loading models…', disabled: true, onSelect: () => {} }]),
+    ],
+    { above: true },
+  );
+}
 
 /** A message sent mid-turn, until the agent reads it. */
 function QueuedTurnView({ m }: { m: QueuedMessage }) {
@@ -652,6 +715,10 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
 
   const shown = blocks.length > limit ? blocks.slice(blocks.length - limit) : blocks;
   const title = bay.title;
+  // The last answer can be retried: the message before it is rewound to and sent again.
+  const lastBlock = blocks[blocks.length - 1];
+  const asked = blocks[blocks.length - 2];
+  const retryAt = agent.canRewind && lastBlock?.kind === 'agent' && !lastBlock.live && asked?.kind === 'user' && asked.item.eventId ? asked.i : null;
   return (
     <>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
@@ -663,9 +730,18 @@ export function Transcript({ bay, items, visible }: { bay: BayDto; items: ItemDt
           )}
           {shown.map((b) =>
             b.kind === 'user' ? (
-              <UserTurnView key={b.key} bayId={bay.id} it={b.item} sessionId={agent.sessionId} sessionTitle={title} />
+              <UserTurnView key={b.key} bayId={bay.id} i={b.i} it={b.item} canRewind={agent.canRewind} sessionId={agent.sessionId} sessionTitle={title} />
             ) : (
-              <AgentTurnView key={b.key} bayId={bay.id} turn={b} agent={b.live ? agent : null} sessionId={agent.sessionId} sessionTitle={title} cwd={bay.cwd || null} />
+              <AgentTurnView
+                key={b.key}
+                bayId={bay.id}
+                turn={b}
+                agent={b.live ? agent : null}
+                sessionId={agent.sessionId}
+                sessionTitle={title}
+                cwd={bay.cwd || null}
+                retry={b === lastBlock ? retryAt : null}
+              />
             ),
           )}
           {agent.queued.map((m, i) => (

@@ -34,7 +34,7 @@ const bay: BayDto = {
     intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
     context: null, toolCount: 0, turns: 0, changedFiles: [], busySince: null, mission: null,
     canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-    subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [],
+    subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null,
   },
 };
 const entry = (name: string): DirEntry => ({ name, path: `C:\\repo\\${name}`, isDir: false, size: 0, modified: 0 });

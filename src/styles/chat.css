@@ -237,6 +237,87 @@
   margin: 0 4px;
 }
 
+/* Undo, edit or retry a message. */
+.rewind {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.rewind-text {
+  width: 100%;
+  min-height: 72px;
+  resize: none;
+}
+
+.rewind-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rewind-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rewind-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.rewind-restore {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.rewind-files ul {
+  max-height: 180px;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.rewind-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 10px;
+  font-size: 12.5px;
+}
+
+.rewind-file .ellipsis {
+  flex: 1;
+  min-width: 0;
+}
+
+.rewind-change--created {
+  color: var(--ok);
+}
+
+.rewind-change--deleted {
+  color: var(--danger);
+}
+
+.rewind-change--modified,
+.rewind-change--changed {
+  color: var(--warn);
+}
+
 .turn-queued {
   font-size: 11.5px;
   color: var(--text-faint);

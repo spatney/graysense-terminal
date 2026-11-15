@@ -49,6 +49,13 @@ pub enum Action {
     Detach { bay: BayId, path: String },
     SetAutoApprove { bay: BayId, on: bool },
     ClearTranscript { bay: BayId },
+    /// Rewind the conversation to the message at `index` and then `then` it: "undo" (back in the
+    /// message box), "edit" (send it changed) or "retry" (send it again, on `model` if given).
+    /// The user confirms with `RewindConfirm`.
+    RewindStart { bay: BayId, index: usize, then: String, #[serde(default)] model: Option<String> },
+    /// `text`: the changed message, when editing.
+    RewindConfirm { bay: BayId, restore_files: bool, #[serde(default)] text: Option<String> },
+    RewindCancel { bay: BayId },
     Reply { bay: BayId, index: usize, reply: Reply },
     ForgetMemories { bay: BayId, index: usize },
     CloseCanvas { bay: BayId, instance: String },
@@ -310,6 +317,12 @@ impl Core {
                 if let Some(v) = self.agent_mut(bay) {
                     v.clear_transcript();
                 }
+                ok
+            }
+            Action::RewindStart { bay, index, then, model } => self.rewind_start(bay, index, &then, model).map(|_| Value::Null),
+            Action::RewindConfirm { bay, restore_files, text } => self.rewind_confirm(bay, restore_files, text).map(|_| Value::Null),
+            Action::RewindCancel { bay } => {
+                self.rewind_cancel(bay);
                 ok
             }
             Action::Reply { bay, index, reply } => self.reply(bay, index, reply).map(|_| Value::Null),
@@ -755,6 +768,9 @@ impl Core {
         let v = self.agent(bay).ok_or("That agent is closed.")?;
         if text.trim().is_empty() || sent.trim().is_empty() {
             return Err("Write a message first.".into());
+        }
+        if v.rewind.as_ref().is_some_and(|r| r.running) {
+            return Err("Wait for the conversation to finish rewinding.".into());
         }
         if v.deferred {
             self.start_deferred_as(bay, text, sent);

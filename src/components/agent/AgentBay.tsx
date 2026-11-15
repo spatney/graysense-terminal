@@ -8,6 +8,7 @@ import { Icon, type MenuItem, showMenu } from '../ui';
 import { Composer } from './Composer';
 import { Dock } from './Dock';
 import { Hero } from './Hero';
+import { RewindDialog } from './RewindDialog';
 import { Transcript } from './Transcript';
 
 const EMPTY: ItemDto[] = [];
@@ -120,6 +121,7 @@ export function AgentBay({ bay, visible }: { bay: BayDto; visible: boolean }) {
         )}
         {dockOpen && <Dock bay={bay} />}
       </div>
+      {agent.rewind && <RewindDialog key={`${agent.rewind.index}:${agent.rewind.then}:${agent.rewind.model ?? ''}`} bay={bay} rewind={agent.rewind} />}
     </>
   );
 }

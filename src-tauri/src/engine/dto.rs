@@ -208,7 +208,7 @@ pub struct IdText {
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ItemDto {
-    User { text: String, files: Vec<String>, took: Option<u64> },
+    User { text: String, files: Vec<String>, took: Option<u64>, event_id: Option<String> },
     Assistant { text: String, done: bool },
     Reasoning { text: String, done: bool },
     Tool(Box<ToolDto>),
@@ -415,7 +415,7 @@ fn permission_dto(p: &agent::PermissionPrompt) -> PermissionDto {
 
 pub fn item_dto(item: &Item) -> ItemDto {
     match item {
-        Item::User { text, files, took } => ItemDto::User { text: text.clone(), files: files.clone(), took: *took },
+        Item::User { text, files, took, event_id } => ItemDto::User { text: text.clone(), files: files.clone(), took: *took, event_id: event_id.clone() },
         Item::Assistant { text, done } => ItemDto::Assistant { text: text.clone(), done: *done },
         Item::Reasoning { text, done, .. } => ItemDto::Reasoning { text: text.clone(), done: *done },
         Item::Tool(c) => {
@@ -487,10 +487,11 @@ pub fn fingerprint(item: &Item) -> u64 {
     let mut h = DefaultHasher::new();
     std::mem::discriminant(item).hash(&mut h);
     match item {
-        Item::User { text, files, took } => {
+        Item::User { text, files, took, event_id } => {
             hash_str(&mut h, text);
             files.len().hash(&mut h);
             took.hash(&mut h);
+            event_id.hash(&mut h);
         }
         Item::Assistant { text, done } | Item::Reasoning { text, done, .. } => {
             hash_str(&mut h, text);
@@ -628,6 +629,67 @@ pub struct AgentDto {
     pub sent_history: Vec<String>,
     /// Messages sent mid-turn that the agent hasn't read yet.
     pub queued: Vec<QueuedDto>,
+    /// The conversation can be rewound to one of its messages now.
+    pub can_rewind: bool,
+    /// Rewinding the conversation, while the user confirms it and the runtime does it.
+    pub rewind: Option<RewindDto>,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindFileDto {
+    pub path: String,
+    pub change: &'static str,
+    pub added: i64,
+    pub removed: i64,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindDto {
+    /// The message's place in the transcript.
+    pub index: usize,
+    /// "undo", "edit" or "retry".
+    pub then: &'static str,
+    /// Retry: the model to retry on (None: the session's).
+    pub model: Option<String>,
+    /// The message's text.
+    pub text: String,
+    /// Messages after it that go too.
+    pub later: usize,
+    /// Asking the runtime what it would do to files.
+    pub loading: bool,
+    /// Rewinding.
+    pub running: bool,
+    pub files: Vec<RewindFileDto>,
+    pub can_restore: bool,
+    /// Why files can't be put back, when they can't.
+    pub reason: Option<String>,
+}
+
+fn rewind_dto(v: &AgentView) -> Option<RewindDto> {
+    use crate::agent::RewindThen;
+    let r = v.rewind.as_ref()?;
+    let (then, model) = match &r.then {
+        RewindThen::Undo => ("undo", None),
+        RewindThen::Edit { .. } => ("edit", None),
+        RewindThen::Retry { model } => ("retry", model.clone()),
+    };
+    let preview = r.preview.as_ref();
+    Some(RewindDto {
+        index: r.index,
+        then,
+        model,
+        text: r.text.clone(),
+        later: v.items.iter().skip(r.index + 1).filter(|i| matches!(i, Item::User { .. })).count(),
+        loading: preview.is_none(),
+        running: r.running,
+        files: preview
+            .map(|p| p.files.iter().map(|f| RewindFileDto { path: f.path.clone(), change: f.change, added: f.added, removed: f.removed }).collect())
+            .unwrap_or_default(),
+        can_restore: preview.is_some_and(|p| p.can_restore),
+        reason: preview.and_then(|p| p.reason.clone()),
+    })
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -684,6 +746,8 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         project_key: v.project.key.clone(),
         sent_history: v.sent_history.iter().rev().take(50).rev().cloned().collect(),
         queued: v.queued().map(|m| QueuedDto { text: m.text.clone(), files: m.files.clone(), steer: m.steer }).collect(),
+        can_rewind: v.can_rewind(),
+        rewind: rewind_dto(v),
     }
 }
 
@@ -1156,6 +1220,14 @@ pub struct ToastDto {
     pub action: Option<(String, Value)>,
 }
 
+/// Text to put in a bay's message box (a message taken back to change).
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FillDto {
+    pub bay: BayId,
+    pub text: String,
+}
+
 #[derive(Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsDto {
@@ -1200,6 +1272,8 @@ pub struct UiUpdate {
     pub activity: Vec<LogLineDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub toasts: Vec<ToastDto>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fills: Vec<FillDto>,
 }
 
 impl UiUpdate {
@@ -1218,6 +1292,7 @@ impl UiUpdate {
             && self.stats.is_none()
             && self.activity.is_empty()
             && self.toasts.is_empty()
+            && self.fills.is_empty()
     }
 }
 

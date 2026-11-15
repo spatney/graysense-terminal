@@ -199,8 +199,9 @@ pub struct SubagentCard {
 
 pub enum Item {
     /// `files`: attached files' full paths (a name for attachments without one). `took`: how long
-    /// the agent worked on it, in ms (from the turn's first to its last event).
-    User { text: String, files: Vec<String>, took: Option<u64> },
+    /// the agent worked on it, in ms (from the turn's first to its last event). `event_id`: its
+    /// `user.message` event, once the runtime has it (the conversation can be rewound to it).
+    User { text: String, files: Vec<String>, took: Option<u64>, event_id: Option<String> },
     Assistant { text: String, done: bool },
     Reasoning { text: String, done: bool },
     Tool(Box<ToolCard>),
@@ -247,6 +248,68 @@ struct Echo {
     queued: bool,
     /// Stopping the turn it waited on cleared it from the runtime: it's never sent again.
     dropped: bool,
+    /// Where the transcript shows it, once it does.
+    item: Option<usize>,
+}
+
+/// A file that undoing turns would put back as it was.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewindFile {
+    pub path: String,
+    /// What the undone turns did to it: "created", "deleted", "modified" or "changed".
+    pub change: &'static str,
+    pub added: i64,
+    pub removed: i64,
+}
+
+/// What undoing turns would do to files.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RewindPreview {
+    pub files: Vec<RewindFile>,
+    /// Files can be put back (the session tracked the agent's file changes).
+    pub can_restore: bool,
+    /// Why they can't, when they can't.
+    pub reason: Option<String>,
+}
+
+/// What happens once the conversation is rewound to a message.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RewindThen {
+    /// The message goes back in the message box.
+    Undo,
+    /// The message is sent again as `text`.
+    Edit { text: String },
+    /// The message is sent again as it was, on `model` when one is given.
+    Retry { model: Option<String> },
+}
+
+/// Rewinding the conversation to a message (dropping it and everything after it), while the
+/// user confirms it and the runtime does it.
+pub struct Rewind {
+    /// The message's place in the transcript.
+    pub index: usize,
+    pub event_id: String,
+    /// The message (its text and attached files).
+    pub text: String,
+    pub files: Vec<String>,
+    pub then: RewindThen,
+    /// The files it would put back (None while the runtime is asked).
+    pub preview: Option<RewindPreview>,
+    /// Asked of the runtime: waiting for it to finish.
+    pub running: bool,
+}
+
+/// How a rewind went.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RewindReport {
+    /// The conversation was rewound.
+    pub rewound: bool,
+    /// Files put back as they were.
+    pub restored: Vec<String>,
+    /// Files left as they are, and why.
+    pub skipped: Vec<(String, &'static str)>,
+    /// What went wrong, when something did.
+    pub problem: Option<String>,
 }
 
 /// A message the agent hadn't read when Graysense closed. The runtime doesn't keep those, so it's
@@ -363,6 +426,8 @@ pub struct AgentView {
     pub has_history: bool,
     /// Restored with work Graysense closing interrupted: carried on once the history is back.
     pub carry_on: Option<CarryOn>,
+    /// Rewinding the conversation to a message, while it's confirmed and done.
+    pub rewind: Option<Rewind>,
 }
 
 /// An MCP App view docked in an agent bay.
@@ -519,6 +584,7 @@ impl AgentView {
             name: None,
             has_history: false,
             carry_on: None,
+            rewind: None,
         }
     }
 
@@ -557,14 +623,15 @@ impl AgentView {
     pub fn echo_user_shown(&mut self, shown: &str, sent: &str, files: Vec<String>, steer: bool) {
         let mid_turn = matches!(self.status, Status::Thinking | Status::Streaming | Status::Tool(_) | Status::Waiting(_) | Status::Compacting);
         let message = QueuedMessage { text: shown.to_owned(), files, steer };
+        let mut item = None;
         if !mid_turn {
-            self.push(Item::User { text: message.text.clone(), files: message.files.clone(), took: None });
+            item = Some(self.push(Item::User { text: message.text.clone(), files: message.files.clone(), took: None, event_id: None }));
             if !self.status.is_busy() {
                 self.status = Status::Thinking;
                 self.busy_since = Some(Since::now());
             }
         }
-        self.local_echo.push_back(Echo { sent: sent.trim().to_owned(), message, queued: mid_turn, dropped: false });
+        self.local_echo.push_back(Echo { sent: sent.trim().to_owned(), message, queued: mid_turn, dropped: false, item });
         self.sent_history.push(shown.to_owned());
         self.has_history = true;
     }
@@ -579,7 +646,8 @@ impl AgentView {
     pub fn show_queued(&mut self) {
         for e in self.local_echo.iter_mut().filter(|e| e.queued) {
             e.queued = false;
-            self.items.push(Item::User { text: e.message.text.clone(), files: e.message.files.clone(), took: None });
+            e.item = Some(self.items.len());
+            self.items.push(Item::User { text: e.message.text.clone(), files: e.message.files.clone(), took: None, event_id: None });
         }
     }
 
@@ -649,9 +717,64 @@ impl AgentView {
         self.index.clear();
         self.sub_by_agent.clear();
         self.learn_cursor = 0;
+        for e in self.local_echo.iter_mut() {
+            e.item = None;
+        }
         if self.status.needs_attention() {
             self.status = Status::Thinking;
         }
+    }
+
+    /// The conversation can be rewound now: the session is up, nothing is running in it, and
+    /// every message sent has come back from the runtime.
+    pub fn can_rewind(&self) -> bool {
+        !self.deferred
+            && self.session_id.is_some()
+            && matches!(self.status, Status::Idle | Status::Error(_))
+            && self.local_echo.iter().all(|e| e.dropped)
+            && self.pending_prompts() == 0
+    }
+
+    /// The message at `index` (its `user.message` event, text and attached files), to rewind the
+    /// conversation to.
+    pub fn rewind_point(&self, index: usize) -> Result<(String, String, Vec<String>), String> {
+        match self.items.get(index) {
+            Some(Item::User { event_id: Some(id), text, files, .. }) => Ok((id.clone(), text.clone(), files.clone())),
+            Some(Item::User { .. }) => Err("Copilot hasn't got this message yet.".into()),
+            _ => Err("That message is gone.".into()),
+        }
+    }
+
+    /// Forget the transcript from `index` on, once the runtime has rewound the conversation to
+    /// the message there.
+    pub fn truncate_at(&mut self, index: usize) {
+        // Unanswered prompts are declined by dropping their reply channels.
+        self.items.truncate(index);
+        self.index.retain(|_, i| *i < index);
+        self.sub_by_agent.retain(|_, i| *i < index);
+        self.local_echo.clear();
+        self.files.clear();
+        for item in &self.items {
+            if let Item::Tool(c) = item
+                && matches!(c.name.as_str(), "edit" | "create" | "apply_patch")
+                && let Some(p) = s(&c.args, "path")
+                && !self.files.contains(&p)
+            {
+                self.files.push(p);
+            }
+        }
+        if self.learn_cursor != usize::MAX {
+            self.learn_cursor = self.learn_cursor.min(index);
+        }
+        if !self.items.iter().any(|i| matches!(i, Item::User { .. })) {
+            // The next message names the session again.
+            self.title = None;
+        }
+        self.learn_due = None;
+        self.turn_started = None;
+        self.carry_on = None;
+        self.settle();
+        self.status = Status::Idle;
     }
 
     /// Plain-text excerpt of the conversation since `from`, for the memory curator. Only what the
@@ -794,9 +917,19 @@ impl AgentView {
                 let content = crate::memory::split_included(&sent).0.to_owned();
                 self.turn_started = event_ms(ev);
                 // Steered and queued messages can reach the agent in a different order than sent.
+                let event_id = (!ev.id.is_empty()).then(|| ev.id.clone());
                 if let Some(at) = self.local_echo.iter().position(|e| e.sent == sent.trim()) {
-                    if let Some(e) = self.local_echo.remove(at).filter(|e| e.queued) {
-                        self.push(Item::User { text: e.message.text, files: e.message.files, took: None });
+                    if let Some(e) = self.local_echo.remove(at) {
+                        if e.queued {
+                            self.push(Item::User { text: e.message.text, files: e.message.files, took: None, event_id });
+                        } else {
+                            // Where it's shown (found again if the transcript moved since).
+                            let unmarked = |i: &Item| matches!(i, Item::User { text, event_id: None, .. } if *text == e.message.text);
+                            let shown = e.item.filter(|&i| self.items.get(i).is_some_and(unmarked)).or_else(|| self.items.iter().rposition(unmarked));
+                            if let Some(Item::User { event_id: id, .. }) = shown.and_then(|i| self.items.get_mut(i)) {
+                                *id = event_id;
+                            }
+                        }
                     }
                 } else {
                     // Full paths, so images can be previewed (a name for attachments without one).
@@ -809,7 +942,7 @@ impl AgentView {
                     if self.title.is_none() {
                         self.title = Some(content.clone());
                     }
-                    self.push(Item::User { text: content.clone(), files, took: None });
+                    self.push(Item::User { text: content.clone(), files, took: None, event_id });
                 }
                 fx.push(self.log(Level::Info, format!("You: {}", trunc(&content, 70))));
                 self.status = Status::Thinking;
@@ -1421,5 +1554,92 @@ mod tests {
         // The runtime's note about it is for the agent; the card already says so.
         v.apply(&ev("3", "session.warning", json!({ "warningType": "interrupted_tools", "message": "1 tool call(s) had no recorded result at resume." })));
         assert!(!v.items.iter().any(|i| matches!(i, Item::Notice { .. })));
+    }
+
+    /// The `user.message` event each message in the transcript came from.
+    fn event_ids(v: &AgentView) -> Vec<(&str, Option<&str>)> {
+        v.items.iter().filter_map(|i| if let Item::User { text, event_id, .. } = i { Some((text.as_str(), event_id.as_deref())) } else { None }).collect()
+    }
+
+    #[test]
+    fn messages_learn_their_event_whether_shown_at_once_queued_or_reopened() {
+        let mut v = working();
+        // Shown when sent, then read: the same item gets the event.
+        assert_eq!(event_ids(&v), [("Write tidy.py", Some("1"))]);
+        // Sent mid-turn twice with the same words: each is shown once, with its own event.
+        v.echo_user_shown("Again", "Again", Vec::new(), false);
+        v.echo_user_shown("Again", "Again", Vec::new(), true);
+        v.apply(&ev("2", "user.message", json!({ "content": "Again" })));
+        v.apply(&ev("3", "session.idle", json!({})));
+        v.apply(&ev("4", "user.message", json!({ "content": "Again" })));
+        assert_eq!(event_ids(&v), [("Write tidy.py", Some("1")), ("Again", Some("2")), ("Again", Some("4"))]);
+        // From the history of a reopened session.
+        let mut later = AgentView::new(2, std::env::temp_dir(), Mode::Interactive);
+        later.apply(&ev("9", "user.message", json!({ "content": "Write tidy.py" })));
+        assert_eq!(event_ids(&later), [("Write tidy.py", Some("9"))]);
+    }
+
+    #[test]
+    fn a_message_shown_before_the_transcript_moved_still_learns_its_event() {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.notice(Level::Info, "Resuming session…");
+        v.status = Status::Idle;
+        v.echo_user_with("Write tidy.py", Vec::new());
+        // The history replaced the notice, so the message moved up.
+        v.items.remove(0);
+        v.apply(&ev("1", "user.message", json!({ "content": "Write tidy.py" })));
+        assert_eq!(event_ids(&v), [("Write tidy.py", Some("1"))]);
+    }
+
+    /// A session with two finished turns: one wrote a.py, the next test_a.py.
+    fn two_turns() -> AgentView {
+        let mut v = AgentView::new(1, std::env::temp_dir(), Mode::Interactive);
+        v.session_id = Some("s".into());
+        v.title = Some("Write a.py".into());
+        v.apply(&ev("1", "user.message", json!({ "content": "Write a.py" })));
+        v.apply(&ev("2", "tool.execution_start", json!({ "toolCallId": "t1", "toolName": "create", "arguments": { "path": "a.py" } })));
+        v.apply(&ev("3", "assistant.message", json!({ "messageId": "m1", "content": "Done." })));
+        v.apply(&ev("4", "session.idle", json!({})));
+        v.apply(&ev("5", "user.message", json!({ "content": "Add tests" })));
+        v.apply(&ev("6", "tool.execution_start", json!({ "toolCallId": "t2", "toolName": "create", "arguments": { "path": "test_a.py" } })));
+        v.apply(&ev("7", "assistant.message", json!({ "messageId": "m2", "content": "Added." })));
+        v.apply(&ev("8", "session.idle", json!({})));
+        v
+    }
+
+    #[test]
+    fn rewinding_forgets_the_transcript_from_the_message_on() {
+        let mut v = two_turns();
+        assert!(v.can_rewind());
+        assert_eq!(v.files, ["a.py", "test_a.py"]);
+        let at = v.items.iter().position(|i| matches!(i, Item::User { text, .. } if text == "Add tests")).unwrap();
+        assert_eq!(v.rewind_point(at), Ok(("5".to_owned(), "Add tests".to_owned(), Vec::new())));
+        assert!(v.rewind_point(at + 1).is_err());
+        v.truncate_at(at);
+        assert_eq!(said(&v), ["Write a.py", "(reply)"]);
+        assert_eq!(v.files, ["a.py"]);
+        assert_eq!(v.status, Status::Idle);
+        assert_eq!(v.title.as_deref(), Some("Write a.py"));
+        // Back to the first message: the next one names the session again.
+        v.truncate_at(0);
+        assert!(v.items.is_empty() && v.files.is_empty() && v.title.is_none());
+    }
+
+    #[test]
+    fn the_conversation_can_be_rewound_only_when_settled() {
+        let mut v = two_turns();
+        v.status = Status::Thinking;
+        assert!(!v.can_rewind());
+        v.status = Status::Error("boom".into());
+        assert!(v.can_rewind());
+        // A message on its way.
+        v.status = Status::Idle;
+        v.echo_user_with("Run them", Vec::new());
+        v.status = Status::Idle;
+        assert!(!v.can_rewind());
+        // A session that hasn't started.
+        let mut fresh = two_turns();
+        fresh.session_id = None;
+        assert!(!fresh.can_rewind());
     }
 }

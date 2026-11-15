@@ -1,8 +1,12 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BayDto, ItemDto, ToolDto } from '../../lib/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from '../../lib/api';
+import { applyUpdate, useUi } from '../../lib/store';
+import type { AgentDto, BayDto, ItemDto, ToolDto } from '../../lib/types';
 import { Transcript, group } from './Transcript';
+
+vi.mock('../../lib/api', async (original) => ({ ...(await original<typeof import('../../lib/api')>()), act: vi.fn() }));
 
 const tool = (label: string, state: ToolDto['state'] = 'ok'): ToolDto => ({
   type: 'tool',
@@ -119,10 +123,68 @@ describe('a live turn', () => {
         intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
         context: null, toolCount: 0, turns: 0, changedFiles: [], busySince: Date.now(), mission: null,
         canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
-        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [],
+        subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind: false, rewind: null,
       },
     };
     render(createElement(Transcript, { bay, items: [{ type: 'user', text: 'fix the flaky test', files: [] }], visible: true }));
     expect(screen.getAllByText('Thinking')).toHaveLength(1);
+  });
+});
+
+describe('rewinding', () => {
+  const settled = (canRewind: boolean): BayDto => ({
+    id: 1, kind: 'agent', title: 'Test', cwd: 'C:\\repo', folder: 'repo', shell: null,
+    agent: {
+      sessionId: 'test', model: null, effort: null, contextTier: null, mode: 'interactive',
+      status: { kind: 'idle', label: 'Ready', detail: null, busy: false, attention: false },
+      intent: null, name: null, deferred: false, incognito: false, tokensIn: 0, tokensOut: 0,
+      context: null, toolCount: 0, turns: 2, changedFiles: [], busySince: null, mission: null,
+      canvases: [], apps: [], attachments: [], autoApprove: false, pending: 0, memoryUsed: 0,
+      subagentsActive: 0, project: 'repo', projectKey: 'repo', sentHistory: [], queued: [], canRewind, rewind: null,
+    } satisfies AgentDto,
+  });
+  const items: ItemDto[] = [
+    { type: 'user', text: 'first', files: [], eventId: 'e1' },
+    { type: 'assistant', text: 'one', done: true },
+    { type: 'user', text: 'second', files: [], eventId: 'e2' },
+    { type: 'assistant', text: 'two', done: true },
+  ];
+  const tips = (tip: string) => Array.from(document.querySelectorAll<HTMLElement>(`[data-tip="${tip}"]`));
+
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.mocked(act).mockReset().mockResolvedValue(null);
+    useUi.setState({ drafts: {}, focusTick: {} });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('offers to undo any message and retry the last once the agent has settled', () => {
+    render(createElement(Transcript, { bay: settled(true), items, visible: true }));
+    expect(tips('Undo from here')).toHaveLength(2);
+    expect(tips('Retry')).toHaveLength(1);
+    fireEvent.click(tips('Retry')[0]);
+    expect(act).toHaveBeenCalledWith({ type: 'rewindStart', bay: 1, index: 2, then: 'retry' });
+    fireEvent.click(tips('Edit and send again')[0]);
+    expect(act).toHaveBeenCalledWith({ type: 'rewindStart', bay: 1, index: 0, then: 'edit' });
+  });
+
+  it('only copies a message to the message box when the conversation can’t be rewound', () => {
+    render(createElement(Transcript, { bay: settled(false), items, visible: true }));
+    expect(tips('Undo from here')).toHaveLength(0);
+    expect(tips('Retry')).toHaveLength(0);
+    fireEvent.click(tips('Copy to the message box')[1]);
+    expect(act).not.toHaveBeenCalled();
+    expect(useUi.getState().drafts[1]).toBe('second');
+  });
+
+  it('puts an undone message above what is being written', () => {
+    useUi.setState({ drafts: { 1: 'half a thought', 2: 'redo this' } });
+    applyUpdate({ seq: 1, full: false, fills: [{ bay: 1, text: 'redo this' }, { bay: 2, text: 'redo this' }, { bay: 3, text: 'new' }] });
+    const { drafts, focusTick } = useUi.getState();
+    expect(drafts).toEqual({ 1: 'redo this\n\nhalf a thought', 2: 'redo this', 3: 'new' });
+    expect(focusTick[1]).toBe(1);
   });
 });

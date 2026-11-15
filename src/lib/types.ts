@@ -59,6 +59,37 @@ export interface AgentDto {
   sentHistory: string[];
   /** Messages sent mid-turn that the agent hasn't read yet, oldest first. */
   queued: QueuedMessage[];
+  /** The conversation can be rewound to one of its messages now (nothing is running). */
+  canRewind: boolean;
+  /** Rewinding the conversation, while the user confirms it and Copilot does it. */
+  rewind: RewindDto | null;
+}
+
+export interface RewindFileDto {
+  path: string;
+  change: 'created' | 'deleted' | 'modified' | 'changed';
+  added: number;
+  removed: number;
+}
+
+export interface RewindDto {
+  /** The message's place in the transcript. */
+  index: number;
+  /** Undo: back in the message box. Edit: sent changed. Retry: sent again (on `model` if set). */
+  then: 'undo' | 'edit' | 'retry';
+  model: string | null;
+  text: string;
+  /** Messages after it that go too. */
+  later: number;
+  /** Asking Copilot which files it would put back. */
+  loading: boolean;
+  running: boolean;
+  /** Files the undone turns changed. */
+  files: RewindFileDto[];
+  /** The files can be put back as they were. */
+  canRestore: boolean;
+  /** Why they can't, when they can't. */
+  reason: string | null;
 }
 
 export interface QueuedMessage {
@@ -171,6 +202,8 @@ export interface UserItem {
   files: string[];
   /** How long the agent worked on it (ms), once a turn of its has ended. */
   took?: number | null;
+  /** Its event in the session, once Copilot has it (the conversation can be rewound to it). */
+  eventId?: string | null;
 }
 export interface AssistantItem {
   type: 'assistant';
@@ -584,6 +617,8 @@ export interface UiUpdate {
   stats?: StatsDto;
   activity?: LogLineDto[];
   toasts?: ToastDto[];
+  /** Text for message boxes (a message taken back to change). */
+  fills?: { bay: BayId; text: string }[];
 }
 
 export interface SearchHit {
@@ -655,6 +690,10 @@ export type Action =
   | { type: 'detach'; bay: BayId; path: string }
   | { type: 'setAutoApprove'; bay: BayId; on: boolean }
   | { type: 'clearTranscript'; bay: BayId }
+  /** Rewind the conversation to the message at `index` (confirmed with `rewindConfirm`). */
+  | { type: 'rewindStart'; bay: BayId; index: number; then: 'undo' | 'edit' | 'retry'; model?: string | null }
+  | { type: 'rewindConfirm'; bay: BayId; restoreFiles: boolean; text?: string | null }
+  | { type: 'rewindCancel'; bay: BayId }
   | { type: 'reply'; bay: BayId; index: number; reply: Reply }
   | { type: 'forgetMemories'; bay: BayId; index: number }
   | { type: 'closeCanvas'; bay: BayId; instance: string }

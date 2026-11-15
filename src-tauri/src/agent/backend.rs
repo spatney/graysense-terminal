@@ -14,6 +14,8 @@ use github_copilot_sdk::handler::{
 };
 use github_copilot_sdk::rpc::{
     CanvasProviderCloseRequest, CanvasProviderInvokeActionRequest, CanvasProviderOpenRequest, CanvasProviderOpenResult,
+    HistoryFileRestoreSkipReason, HistoryPreviewRewindRequest, HistoryPreviewRewindResult, HistoryRewindChangeType,
+    HistoryRewindMode, HistoryRewindOutcome, HistoryRewindRequest, HistoryRewindResult, HistoryRewindUnavailableReason,
     McpAppsCallToolRequest, McpAppsReadResourceRequest, McpConfigAddRequest, McpConfigDisableRequest,
     McpConfigEnableRequest, McpConfigRemoveRequest, McpConfigUpdateRequest, McpDiscoverRequest, McpListToolsRequest,
     McpRestartServerRequest, McpStartServerRequest, McpStopServerRequest, MetadataSetWorkingDirectoryRequest, ModeSetRequest, ModelSwitchToRequest,
@@ -121,6 +123,11 @@ pub enum Cmd {
     DeleteSession { id: String },
     /// Run the memory curator over a conversation excerpt (already formatted).
     Learn { bay: BayId, model: Option<String>, message: String },
+    /// Ask what rewinding the conversation to a `user.message` event would do to files.
+    RewindPreview { bay: BayId, event_id: String },
+    /// Rewind the conversation to a `user.message` event (dropping it and everything after it),
+    /// putting the files the dropped turns changed back as they were too when `restore_files`.
+    Rewind { bay: BayId, event_id: String, restore_files: bool },
     /// Ask a model to compare memories from two PCs (sync's merge). `job` names the request.
     Reconcile { job: u64, model: Option<String>, message: String },
     Mcp(McpCmd),
@@ -314,6 +321,10 @@ pub enum Evt {
     Learned { bay: BayId, result: Result<String, String> },
     /// The model finished comparing memories for a sync (raw JSON text, or an error).
     Reconciled { job: u64, result: Result<String, String> },
+    /// What rewinding the conversation to `event_id` would do to files.
+    RewindPreview { bay: BayId, event_id: String, result: Result<super::RewindPreview, String> },
+    /// The runtime rewound the conversation to `event_id` (or didn't: see the report).
+    Rewound { bay: BayId, event_id: String, result: Result<super::RewindReport, String> },
     /// MCP servers were added, removed or switched on or off: the core refreshes their status.
     McpChanged,
 }
@@ -370,6 +381,7 @@ fn needs_client(cmd: &Cmd) -> bool {
 fn bay_of(cmd: &Cmd) -> Option<BayId> {
     match cmd {
         Cmd::Send { bay, .. } | Cmd::CarryOn { bay } | Cmd::Abort { bay } | Cmd::SetModel { bay, .. } | Cmd::SetMode { bay, .. } | Cmd::SetCwd { bay, .. } | Cmd::Close { bay } | Cmd::NameSession { bay, .. } => Some(*bay),
+        Cmd::RewindPreview { bay, .. } | Cmd::Rewind { bay, .. } => Some(*bay),
         Cmd::App(AppCmd::CallTool { bay, .. }) | Cmd::App(AppCmd::ReadResource { bay, .. }) => Some(*bay),
         Cmd::Mcp(McpCmd::Tools { bay, .. }) | Cmd::Mcp(McpCmd::Restart { bay, .. }) | Cmd::Mcp(McpCmd::Stop { bay, .. }) | Cmd::Mcp(McpCmd::Start { bay, .. }) => Some(*bay),
         _ => None,
@@ -409,10 +421,15 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
         // Session-scoped commands wait for their session to finish starting.
         if let Some(bay) = bay_of(&cmd)
             && !sessions.contains_key(&bay) {
+                const OFFLINE: &str = "This agent session is not connected.";
                 if starting.contains(&bay) {
                     parked.entry(bay).or_default().push(cmd);
+                } else if let Cmd::RewindPreview { event_id, .. } = cmd {
+                    ui.send(Evt::RewindPreview { bay, event_id, result: Err(OFFLINE.into()) });
+                } else if let Cmd::Rewind { event_id, .. } = cmd {
+                    ui.send(Evt::Rewound { bay, event_id, result: Err(OFFLINE.into()) });
                 } else if !matches!(cmd, Cmd::Close { .. }) {
-                    ui.send(Evt::Notice { bay, error: true, text: "This agent session is not connected.".into() });
+                    ui.send(Evt::Notice { bay, error: true, text: OFFLINE.into() });
                 }
                 continue;
             }
@@ -550,7 +567,12 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                 let s = sessions[&bay].clone();
                 let c = client.clone().unwrap();
                 let ui = ui.clone();
-                tokio::spawn(async move {
+                // Messages sent after it go to the new model.
+                let before = sends.remove(&bay);
+                let switch = tokio::spawn(async move {
+                    if let Some(before) = before {
+                        let _ = before.await;
+                    }
                     let reasoning_effort = if let Change::Set(e) = &effort { Some(e.clone()) } else { None };
                     let context_tier = if let Change::Set(t) = &tier { sdk_tier(t) } else { None };
                     let req = ModelSwitchToRequest { model_id: model.clone(), reasoning_effort, context_tier, ..Default::default() };
@@ -572,6 +594,7 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                         ui.send(Evt::Notice { bay, error: true, text: format!("Couldn't switch to {model}: {e}") });
                     }
                 });
+                sends.insert(bay, switch);
             }
             Cmd::SetMode { bay, mode } => {
                 let s = sessions[&bay].clone();
@@ -706,6 +729,31 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                     ui.send(Evt::Reconciled { job, result });
                 });
             }
+            Cmd::RewindPreview { bay, event_id } => {
+                let s = sessions[&bay].clone();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    let req = HistoryPreviewRewindRequest { event_id: event_id.clone() };
+                    let result = s.rpc().history().preview_rewind(req).await.map(rewind_preview).map_err(|e| e.to_string());
+                    ui.send(Evt::RewindPreview { bay, event_id, result });
+                });
+            }
+            Cmd::Rewind { bay, event_id, restore_files } => {
+                let s = sessions[&bay].clone();
+                let ui = ui.clone();
+                // Messages sent after it go to the rewound conversation.
+                let before = sends.remove(&bay);
+                let rewind = tokio::spawn(async move {
+                    if let Some(before) = before {
+                        let _ = before.await;
+                    }
+                    let mode = if restore_files { HistoryRewindMode::ConversationAndFiles } else { HistoryRewindMode::Conversation };
+                    let req = HistoryRewindRequest { event_id: event_id.clone(), mode };
+                    let result = s.rpc().history().rewind(req).await.map(rewind_report).map_err(|e| e.to_string());
+                    ui.send(Evt::Rewound { bay, event_id, result });
+                });
+                sends.insert(bay, rewind);
+            }
             Cmd::Mcp(m) => mcp(client.clone().unwrap(), &sessions, m, ui.clone(), self_tx.clone()),
             Cmd::Plugin(p) => plugins(client.clone().unwrap(), p, ui.clone(), self_tx.clone()),
             Cmd::App(a) => apps(&sessions, a, ui.clone()),
@@ -718,6 +766,76 @@ fn to_session_mode(mode: Mode) -> SessionMode {
         Mode::Interactive => SessionMode::Interactive,
         Mode::Plan => SessionMode::Plan,
         Mode::Autopilot => SessionMode::Autopilot,
+    }
+}
+
+fn rewind_unavailable(reason: &HistoryRewindUnavailableReason) -> &'static str {
+    match reason {
+        HistoryRewindUnavailableReason::FileChangeTrackingDisabled => "This session didn't track the agent's file changes.",
+        HistoryRewindUnavailableReason::SessionBusy => "The agent is still working.",
+        HistoryRewindUnavailableReason::UnsupportedRemoteSession => "Files can't be put back in a remote session.",
+        HistoryRewindUnavailableReason::Unknown => "Copilot can't put files back here.",
+    }
+}
+
+fn rewind_preview(r: HistoryPreviewRewindResult) -> super::RewindPreview {
+    super::RewindPreview {
+        files: r
+            .files
+            .into_iter()
+            .map(|f| super::RewindFile {
+                path: f.path,
+                change: match f.change_type {
+                    HistoryRewindChangeType::Created => "created",
+                    HistoryRewindChangeType::Deleted => "deleted",
+                    HistoryRewindChangeType::Modified => "modified",
+                    HistoryRewindChangeType::Unknown => "changed",
+                },
+                added: f.lines_added,
+                removed: f.lines_removed,
+            })
+            .collect(),
+        can_restore: r.available,
+        reason: if r.available { None } else { Some(r.reason.as_ref().map_or("Copilot can't put files back here.", rewind_unavailable).to_owned()) },
+    }
+}
+
+fn rewind_report(r: HistoryRewindResult) -> super::RewindReport {
+    let detail = |text: &str| match &r.error {
+        Some(e) if !e.trim().is_empty() => format!("{text} ({})", e.trim()),
+        _ => text.to_owned(),
+    };
+    let (rewound, problem) = match r.outcome {
+        HistoryRewindOutcome::Success => (true, None),
+        // Housekeeping after the rewind failed; the conversation and files are as asked.
+        HistoryRewindOutcome::CheckpointCleanupFailed | HistoryRewindOutcome::SnapshotPruneFailed => {
+            tracing::warn!("rewind housekeeping failed: {:?} {:?}", r.outcome, r.error);
+            (true, None)
+        }
+        HistoryRewindOutcome::SessionBusy => (false, Some(detail("The agent is still working. Try again once it stops."))),
+        HistoryRewindOutcome::FileChangeTrackingDisabled => (false, Some(detail("This session didn't track the agent's file changes, so they can't be put back."))),
+        HistoryRewindOutcome::UnsupportedRemoteSession => (false, Some(detail("A remote session can't be rewound."))),
+        HistoryRewindOutcome::FilesRolledBack => (false, Some(detail("Copilot couldn't put the files back, so it left everything as it was."))),
+        HistoryRewindOutcome::RollbackIncomplete => (false, Some(detail("Copilot couldn't put the files back, and some may be left half-restored."))),
+        HistoryRewindOutcome::TruncationFailed => (false, Some(detail("Copilot couldn't rewind the conversation."))),
+        HistoryRewindOutcome::Unknown => (false, Some(detail("Copilot couldn't rewind the conversation."))),
+    };
+    super::RewindReport {
+        rewound,
+        restored: r.restored_files,
+        skipped: r
+            .skipped_files
+            .into_iter()
+            .map(|f| {
+                let why = match f.reason {
+                    HistoryFileRestoreSkipReason::UserModified => "changed since",
+                    HistoryFileRestoreSkipReason::SkippedCapture => "not captured",
+                    HistoryFileRestoreSkipReason::Unknown => "skipped",
+                };
+                (f.path, why)
+            })
+            .collect(),
+        problem,
     }
 }
 

@@ -5,6 +5,7 @@
 pub mod actions;
 pub mod dto;
 mod learn;
+mod rewind;
 mod syncer;
 
 use std::collections::{HashMap, VecDeque};
@@ -290,6 +291,8 @@ pub struct Core {
     activity: VecDeque<LogLineDto>,
     activity_new: Vec<LogLineDto>,
     toasts_new: Vec<ToastDto>,
+    /// Text for message boxes (a message taken back to change), sent once.
+    fills_new: Vec<FillDto>,
     next_toast: u64,
     /// The window has loaded the state: until then toasts wait (and go out with the snapshot).
     ui_connected: bool,
@@ -354,6 +357,7 @@ impl Core {
             activity: VecDeque::new(),
             activity_new: Vec::new(),
             toasts_new: Vec::new(),
+            fills_new: Vec::new(),
             next_toast: 1,
             ui_connected: false,
             app_replies: Vec::new(),
@@ -1088,6 +1092,7 @@ impl Core {
                     let hint = if error.contains("unavailable") { " Install the GitHub Copilot CLI and sign in with `copilot login`, then open a new session." } else { "" };
                     v.notice(Level::Error, format!("Couldn't start the agent: {error}.{hint}"));
                     v.status = Status::Error(error);
+                    v.rewind = None;
                 }
             }
             Evt::SessionClosed { bay } => {
@@ -1095,6 +1100,7 @@ impl Core {
                     v.show_queued();
                     v.settle();
                     v.status = Status::Offline;
+                    v.rewind = None;
                 }
             }
             Evt::CwdChanged { bay, dir } => {
@@ -1284,6 +1290,8 @@ impl Core {
             }
             Evt::Learned { bay, result } => self.finish_learning(bay, result),
             Evt::Reconciled { job, result } => self.sync_reconciled(job, result),
+            Evt::RewindPreview { bay, event_id, result } => self.rewind_previewed(bay, event_id, result),
+            Evt::Rewound { bay, event_id, result } => self.rewound(bay, event_id, result),
             Evt::McpChanged => self.refresh_mcp(),
         }
     }
@@ -1619,6 +1627,7 @@ impl Core {
         if self.ui_connected {
             u.toasts = std::mem::take(&mut self.toasts_new);
         }
+        u.fills = std::mem::take(&mut self.fills_new);
 
         let mut out = Outbox { app_replies: std::mem::take(&mut self.app_replies), attention: std::mem::take(&mut self.attention) && !self.window_focused.load(Ordering::Relaxed), quit: self.quit, ..Default::default() };
         let title = match self.focused.and_then(|id| self.bays.iter().find(|b| b.id == id)) {
@@ -1659,6 +1668,7 @@ impl Core {
             activity: self.activity.iter().rev().cloned().collect(),
             // Toasts raised before the window was listening (a file that couldn't be read…).
             toasts: std::mem::take(&mut self.toasts_new),
+            fills: Vec::new(),
         };
         self.ui_connected = true;
         (pending, u)

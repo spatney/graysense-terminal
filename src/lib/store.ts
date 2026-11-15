@@ -137,8 +137,24 @@ export function applyUpdate(u: UiUpdate) {
       const now = Date.now();
       next.toasts = [...s.toasts, ...u.toasts.map((t) => ({ ...t, born: now }))].slice(-5);
     }
+    if (u.fills?.length) {
+      const drafts = { ...s.drafts };
+      const focusTick = { ...s.focusTick };
+      for (const f of u.fills) {
+        drafts[f.bay] = mergeDraft(f.text, drafts[f.bay]);
+        focusTick[f.bay] = (focusTick[f.bay] ?? 0) + 1;
+      }
+      next.drafts = drafts;
+      next.focusTick = focusTick;
+    }
     return next;
   });
+}
+
+/** A message taken back goes in the message box, above anything being written there. */
+function mergeDraft(text: string, draft: string | undefined): string {
+  if (!draft?.trim() || draft.trim() === text.trim()) return text;
+  return `${text}\n\n${draft}`;
 }
 
 let localToast = -1;
