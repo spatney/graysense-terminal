@@ -502,13 +502,30 @@ pub fn redact_secrets(text: &str) -> String {
         .join("\n")
 }
 
+/// The most characters a memory keeps (notes have a limit of their own).
+const MEMORY_MAX: usize = 280;
+
 pub(crate) fn clean(text: &str) -> String {
     let t = text.trim().trim_start_matches(['-', '*', '•']).trim();
-    let mut t: String = t.chars().filter(|c| !c.is_control()).collect();
-    if t.chars().count() > 280 {
-        t = t.chars().take(279).collect::<String>() + "…";
+    let t: String = t.chars().filter(|c| !c.is_control()).collect();
+    shorten(&t, MEMORY_MAX)
+}
+
+/// `text` in at most `max` characters, cut after a whole word (with "…") when it's longer.
+pub(crate) fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
     }
-    t
+    let cut: String = text.chars().take(max - 1).collect();
+    let whole_word = text.chars().nth(max - 1).is_some_and(char::is_whitespace);
+    let kept = match cut.rfind(char::is_whitespace) {
+        _ if whole_word => cut.as_str(),
+        // A word boundary near the end; one long word (a path, a URL) is cut where it must be.
+        Some(i) if cut[..i].chars().count() >= max / 2 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    let kept = kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '.' | '-' | '–' | '—'));
+    format!("{kept}…")
 }
 
 /// A note's text: line breaks kept (no more than one blank line in a row), at most 8,000 characters.
@@ -1568,7 +1585,7 @@ Operations: \"add\" a new memory; \"update\" an existing memory id when the conv
 \"reinforce\" an existing id the conversation confirmed. Confidence: 0.9+ only when the USER stated it explicitly or it was verified; 0.6-0.8 when inferred from repeated behaviour; \
 omit anything below 0.6. It is normal to return no operations.
 
-Also write \"episode\": one sentence summarising the work done in this excerpt (what was built, fixed, investigated or decided), \
+Also write \"episode\": one sentence of at most 200 characters summarising the work done in this excerpt (what was built, fixed, investigated or decided), \
 so a future agent can pick up where this left off. Use an empty string when no real work happened (questions, small talk, acknowledgements) \
 and never mention memories or this curation.
 Every operation has every field: use id 0 for \"add\", and an empty string for any text, evidence, kind or scope that doesn't apply. \
@@ -1796,6 +1813,38 @@ mod tests {
         assert_eq!(ops.len(), 3);
         assert!(matches!(&ops[0], Op::Add { scope: Scope::Project(k), .. } if k == "c:\\repo"));
         assert!(matches!(ops[2], Op::Episode { .. }));
+    }
+
+    /// `cut` is the start of `full`, ending after a whole word, then "…".
+    fn cut_after_a_word(cut: &str, full: &str) -> bool {
+        let Some(kept) = cut.strip_suffix('…') else { return false };
+        full.starts_with(kept) && full[kept.len()..].starts_with([' ', ','])
+    }
+
+    #[test]
+    fn long_text_is_cut_after_a_whole_word() {
+        assert_eq!(shorten("Short and sweet", 280), "Short and sweet");
+        let exact = "a".repeat(280);
+        assert_eq!(shorten(&exact, 280), exact);
+        let words = "Fixed the flaky login test by waiting for the session cookie, ".repeat(6);
+        let cut = shorten(&words, 280);
+        assert!(cut.chars().count() <= 280 && cut_after_a_word(&cut, &words), "{cut}");
+        // One long word (a path) is cut where it has to be; characters, not bytes, are counted.
+        let path = format!("Logs are in C:\\{}", "é".repeat(400));
+        let cut = shorten(&path, 280);
+        assert_eq!(cut.chars().count(), 280);
+        assert!(cut.starts_with("Logs are in C:\\éé") && cut.ends_with("é…"));
+    }
+
+    #[test]
+    fn a_long_episode_keeps_whole_words() {
+        let p = Project { key: "c:\\repo".into(), name: "repo".into(), root: PathBuf::from("C:\\repo") };
+        let episode = "Rebuilt the release pipeline so signing runs after the installer is built, ".repeat(5);
+        let ops = parse_curator(&json!({ "ops": [], "episode": episode }).to_string(), Some(&p));
+        let mut s = store();
+        s.apply(ops, Source::default(), Some(0.85));
+        let saved = &s.memories.iter().find(|m| m.kind == Kind::Episode).unwrap().text;
+        assert!(cut_after_a_word(saved, &episode), "{saved}");
     }
 
     #[test]
