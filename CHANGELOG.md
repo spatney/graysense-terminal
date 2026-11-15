@@ -3,6 +3,98 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.4.0 — 2026-11-15
+
+### Undo, edit, retry and fork
+
+- **Undo from here**: hover one of your messages and undo it. The conversation goes back to just
+  before it, the message returns to the message box, and the files the agent changed since are put
+  back as they were (files you changed by hand since are left alone). A dialog lists what goes
+  first. Graysense now records the files agents change so it can do this (**Settings › Agents ›
+  Track file changes for undo**, on by default); turns from before this version undo the
+  conversation only.
+- **Edit and send again**: the edit button on one of your messages now takes the conversation back
+  to it, after the same check, so you can change it and send it again. Before, it only copied the
+  message to the message box.
+- **Retry** the last answer, on the same model or another one.
+- **Fork a conversation** into a new session: all of it from the bay's ⋯ menu, or from any of your
+  messages (the copy stops just before it and puts it in the message box). The fork keeps the
+  model, thinking level, context window and approval choice.
+
+### Agents side by side
+
+- **Worktree sessions**: **New agent in a worktree** (the ⌄ menu beside +, the command palette, or
+  a mission's launch options) gives the session a branch and a folder of its own beside the
+  repository (`<repo>.worktrees\<slug>`), made with its first message and named after it.
+  **Fork into a worktree** takes the uncommitted changes along. When the work is done, click the
+  branch chip to review it, then merge it or open a pull request. Merging into a branch that's
+  checked out updates its files, and a conflict changes nothing. Closing a session with work in its
+  worktree asks whether to keep it.
+- **A warning when agents share a folder**: start a session where another agent is changing files
+  (the same repository, or the same folder outside one) and it says who. Before its first message,
+  **Start in a worktree instead** swaps it for a worktree session, keeping its model, mode,
+  attachments and the message you were writing.
+
+### Memory
+
+- **See what an agent was given, and correct it**: the "Used 3 memories" chip under an answer
+  opens into those memories, with Show, Edit, Pin and **Wrong or outdated**. That forgets the
+  memory (with Undo), stops it being learned again, and tells the agents that were given it.
+- **Learns how failures were fixed**: the curator now sees why a step failed (one line, with
+  secrets removed) and saves the fix as a how-to when the conversation shows one.
+- **Finds memories by other names**: learning gives each memory a few hidden search words
+  (synonyms, the tool or area it's about), so asking about *the bundler* finds *"Start Vite
+  with…"*. They sync too, and older versions don't wipe them.
+- **Where you left off**: when a session's work isn't finished, learning notes the next step.
+  Resuming the session (or reopening one left for more than 12 hours) shows a card with the
+  summary and that step, and **Continue** puts the step in the message box. New agents in the
+  project are told what was left to do.
+- **Memory tidies itself**: about once a week, or with **Tidy up now** in Memory, the curator
+  merges saved preferences, facts and how-tos that say the same thing. What you wrote or pinned is
+  only proposed for change, and anything dropped waits in Deleted for 30 days.
+- **Don't learn from a project**: from a session's folder menu, or in Memory. Nothing said there
+  is learned or saved, and agents there still get your memories.
+- **Cut cleanly**: long memories end after a whole word (with "…"), and what happened in a
+  session is kept to one short sentence.
+
+### Everyday
+
+- **Find in a conversation** (Ctrl+F, or the search button in a bay's header): matches reach turns
+  that aren't on screen yet, opening the work log or step they're in, and a match can run across
+  bold text or code. Enter and Shift+Enter step through them; Esc closes.
+- **Unsent messages are kept** across restarts and updates, and come back when you reopen the
+  session.
+- **Windows notifications** when an agent finishes, asks a question or needs approval while
+  Graysense is in the background (several at once are combined, questions first). Click one to go
+  to that agent. Incognito sessions only say what happened. Turn them off in **Settings ›
+  Appearance › Desktop notifications**.
+- **Premium requests left** show in the status bar (it warns under 10%), with the reset date and
+  what the focused session has used.
+
+### Fixes
+
+- **A damaged settings, memory or missions file is never written over**: it's moved aside and the
+  last good copy is restored, with a message saying so. Saves reach the disk before they replace
+  the old file, and one that fails is tried again, then reported. Messages raised before the window
+  opens (such as "Graysense updated") now show once it does.
+- **The Changes tab lists the files patches wrote** (how GPT models edit), not only files edited
+  one at a time.
+
+### Known limitations
+
+- Undoing a turn doesn't take back what was learned from it.
+- Retrying or editing a question you asked about your notes sends it without the notes.
+- A fork works in the same folder as the original unless you fork into a worktree; a worktree fork
+  from an earlier message takes the files as they are now.
+- Worktrees don't get the files Git ignores (such as `node_modules` or `.env`): install
+  dependencies in them. Merging into a branch that isn't checked out needs Git 2.38 or newer.
+  Deleting a session that isn't open leaves its worktree.
+- The warning about agents sharing a folder is given when a session starts or moves, not when
+  another agent moves in later.
+- Hidden search words help agents find memories, not the Memory panel's search. The projects
+  Graysense doesn't learn from are kept per PC, and unsent messages in incognito sessions aren't
+  kept.
+
 ## 0.3.2 — 2026-11-14
 
 - **Changes shown inline**: an agent's edits now read like a code review. Open an edit or a new
