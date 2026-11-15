@@ -6,6 +6,7 @@ import { openOverlay, toast, useUi } from '../../lib/store';
 import type { MemoryDto, MemoryKind, MemoryStateDto, ModelDto, Settings } from '../../lib/types';
 import { Icon, type MenuItem, Seg, Toggle, copyText, showMenu, useAutosize } from '../ui';
 import { NotesView } from './NotesView';
+import { SyncPointer } from './SyncCard';
 
 type Tab = 'notes' | 'learned';
 type Filter = 'review' | 'all' | 'you' | 'project' | 'sessions' | 'rules' | 'deleted';
@@ -147,6 +148,7 @@ function cleanQuote(q: string | null | undefined): string | null {
   const t = (q ?? '')
     .trim()
     .replace(/^user input:\s*/i, '')
+    .replace(/^merged into another memory:\s*/i, '')
     .replace(/^["“]+|["”]+$/g, '')
     .trim();
   return t || null;
@@ -175,8 +177,11 @@ function whyLabel(why: string): string {
       return 'Dismissed';
     case 'removed':
       return 'Removed';
+    case 'merged':
+      return 'Merged with a copy from another PC';
     default:
-      return `Removed by learning: ${why}`;
+      // The AI's merge says why: "Merged into another memory: both say the same thing".
+      return why.startsWith('Merged into another memory') ? `Merged${why.slice('Merged into another memory'.length)}` : `Removed by learning: ${why}`;
   }
 }
 
@@ -892,6 +897,7 @@ function EmptyState({
 
 function SettingsCard({ settings, models, onImported, onClose }: { settings: Settings | null; models: ModelDto[] | undefined; onImported: (n: number) => void; onClose: () => void }) {
   const id = useId();
+  const synced = useUi((s) => s.sync?.repo != null);
   const off = !settings || !settings['memory.enabled'];
   const model = settings?.['memory.learning_model'] ?? null;
   const list = models ?? [];
@@ -939,6 +945,7 @@ function SettingsCard({ settings, models, onImported, onClose }: { settings: Set
         </select>
         <span className="mem-set-desc">Reads conversations in the background and never uses tools.</span>
       </div>
+      <SyncPointer />
       <div className="mem-set-data">
         <div className="mem-set-actions">
           <button type="button" className="btn sm" data-tip="Save your memories as a JSON file" onClick={() => void exportMemory(false)}>
@@ -961,7 +968,7 @@ function SettingsCard({ settings, models, onImported, onClose }: { settings: Set
       </div>
       <p className="mem-set-note">
         <Icon name="lock" />
-        Stored only on this PC. Secrets are never saved.
+        {synced ? 'Stored on this PC. Secrets are never saved. Synced to your private GitHub repository.' : 'Stored only on this PC. Secrets are never saved.'}
       </p>
     </section>
   );

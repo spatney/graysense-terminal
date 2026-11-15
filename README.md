@@ -73,6 +73,32 @@ signed in (`copilot login`).
   edit, pin or delete anything, see where each memory came from, export or import it, and turn
   learning — or all of memory — off. Incognito sessions never read or write memory.
 
+**Sync to GitHub**
+- Keep your **memories, notes (with their files), missions and a few preferences** in a **private
+  GitHub repository**, so they survive a reinstall and follow you between PCs. **Settings > Sync**
+  makes the repository for you (with the [GitHub CLI](https://cli.github.com): `gh auth login`) or
+  connects one you already have. It needs Git installed.
+- Connect a repository that already holds Graysense data (from another PC, say) while this PC has
+  some too, and choose **Merge with AI**: duplicates are combined, conflicts are settled by rules
+  (what you wrote wins, then the newer), and an AI pass compares what each PC learned on its own.
+  Anything you wrote or pinned is only *proposed* for change, waiting in Memory › Review; notes are
+  never rewritten; and a backup of this PC's memory is kept first
+  (`%APPDATA%\Graysense\sync\backups`). Or take the repository's copy as it is.
+- After that it syncs by itself: shortly after you change something, when Graysense opens, and every
+  so often (or press **Sync now**). A deletion on one PC reaches the others, and a deleted memory can
+  still be restored for 30 days. Project memories follow the project's git remote, so the same
+  repository cloned into different folders shares its memories.
+- A sync never passes on a wipe. If most of what was synced would go at once (the repository was
+  deleted and made again, this PC's memory file wouldn't load, you pressed "forget everything"),
+  Graysense stops and asks: put it back, or go ahead. Nothing has changed until you answer.
+- The repository is yours to browse: `MEMORY.md` is a readable copy of everything. Never synced:
+  approval rules (they let commands run without asking), folders, your shell and any setting that
+  changes what agents may do on their own. A public repository is refused unless you confirm, and
+  anything that looks like a secret stays on the PC it's on.
+  What comes back from the repository is checked before it's used: file names, paths that lead off
+  the PC, files a note names on another PC (never given to an agent), and settings outside the
+  short list above are never trusted.
+
 **Sessions**
 - Every new session gets its own folder, named after your first message, in a sessions folder you
   choose (`~\Graysense\Sessions` by default). A history sidebar (Ctrl+Shift+H): open sessions,
@@ -130,6 +156,7 @@ src-tauri/          Rust: the Graysense core
   src/agent/        Copilot SDK actor (sessions, tools, permissions, canvases, MCP, plugins)
   src/engine/       UI-agnostic core: bays, actions, learning, and dirty-tracked UI updates
   src/memory.rs     memory and notes (ranking, relevance, curation, attachments)
+  src/sync/         GitHub sync: items and the three-way merge, git transport, AI reconcile
   src/terminal/     PTY service (ConPTY via portable-pty)
   src/search.rs     search index over sessions and session files
   src/update.rs     Velopack updater (draft-aware GitHub releases source)
@@ -156,7 +183,9 @@ cd src-tauri; cargo test    # core tests
 
 `GRAYSENSE_CONFIG_DIR` points the app at another profile (settings, memory, workspace), handy for
 trying things without touching your own. `GRAYSENSE_LOG=debug` turns up logging
-(`%APPDATA%\Graysense\graysense.log`).
+(`%APPDATA%\Graysense\graysense.log`). `GRAYSENSE_SYNC_REMOTE` points sync at a folder of bare
+repositories (`<owner>/<name>.git`) instead of github.com, to try sync (two profiles, one repository)
+without GitHub.
 
 ## Release
 

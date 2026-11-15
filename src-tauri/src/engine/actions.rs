@@ -91,6 +91,14 @@ pub enum Action {
     MemoryClearAll,
     MemoryExport { path: String, markdown: bool },
     MemoryImport { path: String },
+    // GitHub sync
+    /// Connect to a repository (`owner/name` or its address), or with `create` make a new private one.
+    SyncConnect { repo: String, create: bool },
+    /// The answer to what sync is waiting on: `merge`, `replace`, `public`, `keep`, `remove` or `cancel`.
+    SyncAnswer { choice: String },
+    SyncNow,
+    SyncDisconnect,
+    SyncOptions { auto: Option<bool>, files: Option<bool>, settings: Option<bool>, missions: Option<bool> },
     // notes (the user's saved context: memories of kind Note)
     NoteAdd {
         text: String,
@@ -537,6 +545,19 @@ impl Core {
                 self.toast(Level::Ok, format!("Imported {n} memor{} for review", if n == 1 { "y" } else { "ies" }));
                 Ok(json!(n))
             }
+            Action::SyncConnect { repo, create } => {
+                if repo.trim().is_empty() {
+                    return Err("Enter the repository's name.".into());
+                }
+                self.sync_connect(repo, create, false).map(|_| Value::Null)
+            }
+            Action::SyncAnswer { choice } => self.sync_answer(&choice).map(|_| Value::Null),
+            Action::SyncNow => self.sync_now().map(|_| Value::Null),
+            Action::SyncDisconnect => self.sync_disconnect().map(|_| Value::Null),
+            Action::SyncOptions { auto, files, settings, missions } => {
+                self.sync_options(auto, files, settings, missions);
+                ok
+            }
             Action::NoteAdd { text, files, links, project, session, title } => {
                 let files: Vec<PathBuf> = files.into_iter().map(PathBuf::from).filter(|p| p.exists()).collect();
                 let source = (session.is_some() || title.is_some()).then(|| crate::memory::Source { session, title, quote: None, at: crate::memory::now() });
@@ -711,7 +732,7 @@ impl Core {
             let notes: Vec<crate::memory::Memory> = ids.iter().filter_map(|id| store.get(*id)).filter(|m| m.kind == Kind::Note).cloned().collect();
             store.mark_used(&ids);
             let sent = crate::memory::ask_with_notes(&question, &notes.iter().collect::<Vec<_>>());
-            let files: Vec<PathBuf> = notes.iter().flat_map(|m| m.attachments.iter().filter_map(|a| a.open_path())).filter(|p| p.is_file()).take(8).collect();
+            let files: Vec<PathBuf> = notes.iter().flat_map(|m| m.attachments.iter().filter_map(|a| a.trusted_path())).filter(|p| p.is_file()).take(8).collect();
             (sent, files, notes.into_iter().map(|m| (m.id, m.text)).collect::<Vec<_>>())
         };
         let bay = self.new_session(None, false);

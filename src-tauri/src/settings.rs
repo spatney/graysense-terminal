@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -233,6 +234,26 @@ impl Settings {
         Value::Object(out)
     }
 
+    /// The preferences sync carries, under the keys `apply_patch` takes.
+    pub fn synced_values(&self) -> BTreeMap<String, Value> {
+        let all = self.values();
+        SYNCED_KEYS.iter().filter_map(|k| all.get(*k).map(|v| ((*k).to_owned(), v.clone()))).collect()
+    }
+
+    /// Apply preferences that came from another PC, one by one: a model this account doesn't
+    /// offer must not stop the theme from changing. Returns what changed.
+    pub fn apply_synced(&mut self, changes: &BTreeMap<String, Value>, models: &[String]) -> Vec<String> {
+        let mut done = Vec::new();
+        for (key, value) in changes.iter().filter(|(k, _)| SYNCED_KEYS.contains(&k.as_str())) {
+            let mut one = Map::new();
+            one.insert(key.clone(), value.clone());
+            if let Ok(mut applied) = self.apply_patch(&one, models) {
+                done.append(&mut applied);
+            }
+        }
+        done
+    }
+
     /// Apply `{key: value}` changes from an agent, all or nothing. Returns what changed.
     pub fn apply_patch(&mut self, changes: &Map<String, Value>, models: &[String]) -> Result<Vec<String>, String> {
         let mut next = self.clone();
@@ -316,6 +337,24 @@ pub const CONTEXT_TIERS: [&str; 2] = ["default", "long_context"];
 
 /// Settings an agent may change without asking: appearance and layout only.
 pub const SAFE_KEYS: &[&str] = &["theme", "terminal_font_size", "layout", "side_panel", "side_panel_width", "show_reasoning", "cursor_blink", "performance_hud", "zoom"];
+
+/// Preferences that make sense on any PC, which sync carries. Not what's about one PC (folders,
+/// shell, window, zoom, updates), and nothing that changes what agents may do without asking
+/// (`default_auto_approve`) or what program runs (`shell`): a repository must never be able to
+/// switch those on.
+pub const SYNCED_KEYS: &[&str] = &[
+    "theme",
+    "layout",
+    "show_reasoning",
+    "cursor_blink",
+    "default_model",
+    "default_effort",
+    "default_context",
+    "memory.learn",
+    "memory.share",
+    "memory.review_all",
+    "memory.learning_model",
+];
 
 const PANELS: [&str; 7] = ["missions", "sessions", "memory", "mcp", "plugins", "settings", "hidden"];
 

@@ -73,7 +73,8 @@ impl Kind {
         }
     }
 
-    fn parse(s: &str) -> Option<Kind> {
+    /// The kinds a person or a curator can name (approval rules are only ever learned).
+    pub fn parse(s: &str) -> Option<Kind> {
         match s.to_ascii_lowercase().as_str() {
             "preference" => Some(Kind::Preference),
             "fact" => Some(Kind::Fact),
@@ -82,6 +83,23 @@ impl Kind {
             "note" => Some(Kind::Note),
             _ => None,
         }
+    }
+
+    /// The name [`Kind::parse`] reads back.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Preference => "preference",
+            Kind::Fact => "fact",
+            Kind::Procedure => "procedure",
+            Kind::Episode => "episode",
+            Kind::Rule => "rule",
+            Kind::Note => "note",
+        }
+    }
+
+    /// Preferences, facts and how-tos: what learning writes and the AI merge may combine.
+    pub fn is_knowledge(self) -> bool {
+        matches!(self, Kind::Preference | Kind::Fact | Kind::Procedure)
     }
 
     fn weight(self) -> f32 {
@@ -122,7 +140,7 @@ pub enum Origin {
     Agent,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     pub session: Option<String>,
     pub title: Option<String>,
@@ -130,7 +148,7 @@ pub struct Source {
     pub at: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Revision {
     pub text: String,
     pub at: i64,
@@ -140,6 +158,10 @@ pub struct Revision {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Memory {
     pub id: MemoryId,
+    /// The same on every PC that syncs this memory (`id` is only unique here). Older memories get
+    /// one the first time they're synced.
+    #[serde(default)]
+    pub uid: String,
     pub kind: Kind,
     pub scope: Scope,
     pub text: String,
@@ -199,6 +221,10 @@ pub struct Attachment {
     pub stored: Option<String>,
     #[serde(default)]
     pub size: Option<u64>,
+    /// It came from another PC (through sync), so `target` is only where it was there, not
+    /// something this PC's user chose: it's never handed to an agent from here.
+    #[serde(default)]
+    pub foreign: bool,
 }
 
 impl Attachment {
@@ -208,6 +234,17 @@ impl Attachment {
             return None;
         }
         self.stored.as_deref().map(PathBuf::from).filter(|p| p.exists()).or_else(|| Some(PathBuf::from(&self.target)).filter(|p| p.exists()))
+    }
+
+    /// The file to give an agent without asking (it can read it from then on): Graysense's own copy,
+    /// or the original when the user attached it on this PC. An original that another PC's data
+    /// names is never trusted: whoever can write to the repository could name any file here.
+    pub fn trusted_path(&self) -> Option<PathBuf> {
+        if self.kind == AttachKind::Link {
+            return None;
+        }
+        let copy = self.stored.as_deref().map(PathBuf::from).filter(|p| p.exists());
+        copy.or_else(|| Some(PathBuf::from(&self.target)).filter(|p| !self.foreign && p.exists()))
     }
 }
 
@@ -229,6 +266,8 @@ impl Memory {
             Some("undone") => ("Undone", None),
             Some("dismissed") => ("Dismissed", None),
             Some("removed") => ("Removed", None),
+            Some("merged") => ("Merged", Some("combined with a copy from your other PC")),
+            Some(other) if other.starts_with("Merged into another memory") => ("Merged", Some(other.trim_start_matches("Merged into another memory").trim_start_matches(": ").trim()).filter(|r| !r.is_empty())),
             Some(other) => ("Removed by learning", Some(other)),
             None => ("Deleted", None),
         }
@@ -320,6 +359,17 @@ pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// A fresh identity for something that syncs between PCs.
+pub fn new_uid() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..16].to_owned()
+}
+
+/// Whether `uid` is safe to use as a file or folder name (sync reads them from a repository
+/// anyone with access could have edited).
+pub fn valid_uid(uid: &str) -> bool {
+    (8..=64).contains(&uid.len()) && uid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// A project as memory sees it: the git root (or folder) a session works in.
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -371,7 +421,7 @@ pub fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn jaccard(a: &str, b: &str) -> f32 {
+pub(crate) fn jaccard(a: &str, b: &str) -> f32 {
     let a: HashSet<String> = tokens(a).into_iter().collect();
     let b: HashSet<String> = tokens(b).into_iter().collect();
     if a.is_empty() || b.is_empty() {
@@ -452,7 +502,7 @@ pub fn redact_secrets(text: &str) -> String {
         .join("\n")
 }
 
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     let t = text.trim().trim_start_matches(['-', '*', '•']).trim();
     let mut t: String = t.chars().filter(|c| !c.is_control()).collect();
     if t.chars().count() > 280 {
@@ -462,7 +512,7 @@ fn clean(text: &str) -> String {
 }
 
 /// A note's text: line breaks kept (no more than one blank line in a row), at most 8,000 characters.
-fn clean_note(text: &str) -> String {
+pub(crate) fn clean_note(text: &str) -> String {
     let mut out = String::new();
     let mut blank = 0;
     for line in text.trim().lines() {
@@ -611,7 +661,11 @@ impl MemoryStore {
     }
 
     pub fn load() -> Self {
-        let path = Self::path();
+        Self::load_from(Self::path())
+    }
+
+    /// The store kept in `path`.
+    pub fn load_from(path: PathBuf) -> Self {
         let disk: Disk = read_json(&path).unwrap_or_default();
         let next_id = disk.next_id.max(disk.memories.iter().map(|m| m.id).max().unwrap_or(0) + 1);
         let mut s = MemoryStore { memories: disk.memories, approvals: disk.approvals, next_id, path, dirty: false, revision: 0 };
@@ -628,9 +682,16 @@ impl MemoryStore {
         self.dirty = false;
     }
 
-    fn touch(&mut self) {
+    pub(crate) fn touch(&mut self) {
         self.dirty = true;
         self.revision += 1;
+    }
+
+    /// The next free id (sync adds memories that arrive from the repository).
+    pub(crate) fn alloc_id(&mut self) -> MemoryId {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
     }
 
     /// Drop archived entries older than 30 days and cap the inbox.
@@ -650,8 +711,59 @@ impl MemoryStore {
         self.memories.iter().find(|m| m.id == id)
     }
 
-    fn get_mut(&mut self, id: MemoryId) -> Option<&mut Memory> {
+    pub(crate) fn get_mut(&mut self, id: MemoryId) -> Option<&mut Memory> {
         self.memories.iter_mut().find(|m| m.id == id)
+    }
+
+    // ---------------------------------------------------------------- sync
+
+    /// Give every memory a uid of its own (older ones, and imports, may have none or share one).
+    /// Returns whether any changed.
+    pub fn ensure_uids(&mut self) -> bool {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut changed = false;
+        for m in self.memories.iter_mut() {
+            if !valid_uid(&m.uid) || !seen.insert(m.uid.clone()) {
+                m.uid = new_uid();
+                seen.insert(m.uid.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            self.dirty = true;
+        }
+        changed
+    }
+
+    /// The memories sync carries: what's active or waiting for review, except approval rules
+    /// (which let commands run without asking, so they stay on the PC that earned them).
+    pub fn syncable(&self) -> impl Iterator<Item = &Memory> {
+        self.memories.iter().filter(|m| m.state != State::Archived && m.kind != Kind::Rule)
+    }
+
+    /// Texts the user recently deleted, dismissed or undid (lower-case), so a copy of one that
+    /// turns up on another PC isn't brought back here.
+    pub fn rejected_texts(&self) -> Vec<String> {
+        self.memories
+            .iter()
+            .filter(|m| m.kind != Kind::Note && m.state == State::Archived && m.history.last().is_some_and(|r| REJECTED.contains(&r.why.as_str())))
+            .map(|m| m.text.to_lowercase())
+            .collect()
+    }
+
+    /// Hand the memories synced from a repository (they sit under a `git:<remote>` scope until
+    /// a folder with that remote is known) to the folder `key`. Returns how many moved.
+    pub fn adopt_project(&mut self, remote: &str, key: &str) -> usize {
+        let from = format!("git:{remote}");
+        let mut n = 0;
+        for m in self.memories.iter_mut().filter(|m| matches!(&m.scope, Scope::Project(k) if *k == from)) {
+            m.scope = Scope::Project(key.to_owned());
+            n += 1;
+        }
+        if n > 0 {
+            self.touch();
+        }
+        n
     }
 
     /// Insert a new memory unless it duplicates an existing one (then that one is reinforced).
@@ -679,6 +791,7 @@ impl MemoryStore {
         let t = now();
         self.memories.push(Memory {
             id,
+            uid: new_uid(),
             kind,
             scope,
             text,
@@ -864,6 +977,7 @@ impl MemoryStore {
         let text = if text.is_empty() { files.first().map(|f| format!("Saved {}", f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())).unwrap_or_else(|| "Saved a link".into()) } else { text };
         let mut note = Memory {
             id,
+            uid: new_uid(),
             kind: Kind::Note,
             scope,
             text,
@@ -946,7 +1060,8 @@ impl MemoryStore {
             match a.kind {
                 AttachKind::Link => s.push_str(&format!("\n  link: {}", a.target)),
                 _ => {
-                    let path = a.open_path().map(|p| p.display().to_string()).unwrap_or_else(|| format!("{} (missing)", a.target));
+                    // What another PC's data names as the original isn't offered to the agent.
+                    let path = a.trusted_path().map(|p| p.display().to_string()).unwrap_or_else(|| if a.foreign { format!("{} (not on this PC)", a.name) } else { format!("{} (missing)", a.target) });
                     s.push_str(&format!("\n  {}: {path}", if a.kind == AttachKind::Folder { "folder" } else { "file" }));
                 }
             }
@@ -1282,6 +1397,9 @@ impl MemoryStore {
                 self.next_id += 1;
                 let mut note = m.clone();
                 note.id = id;
+                if !valid_uid(&note.uid) || self.memories.iter().any(|x| x.uid == note.uid) {
+                    note.uid = new_uid();
+                }
                 note.state = State::Active;
                 note.attachments.iter_mut().for_each(|a| a.stored = None);
                 self.memories.push(note);
@@ -1347,31 +1465,34 @@ fn attach(note: &mut Memory, files: &[PathBuf], links: &[String], dir: &Path) {
         let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| f.display().to_string());
         let meta = std::fs::metadata(f).ok();
         if meta.as_ref().is_some_and(|m| m.is_dir()) {
-            note.attachments.push(Attachment { kind: AttachKind::Folder, name, target: f.display().to_string(), stored: None, size: None });
+            note.attachments.push(Attachment { kind: AttachKind::Folder, name, target: f.display().to_string(), stored: None, size: None, foreign: false });
             continue;
         }
         let size = meta.as_ref().map(|m| m.len());
-        let stored = size.filter(|s| *s <= MAX_COPY).and_then(|_| {
-            std::fs::create_dir_all(dir).ok()?;
-            let mut dest = dir.join(&name);
-            let mut n = 2;
-            while dest.exists() {
-                let stem = Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                let ext = Path::new(&name).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-                dest = dir.join(format!("{stem} ({n}){ext}"));
-                n += 1;
-            }
-            std::fs::copy(f, &dest).ok()?;
-            Some(dest.display().to_string())
-        });
-        note.attachments.push(Attachment { kind: AttachKind::File, name, target: f.display().to_string(), stored, size });
+        let stored = size.filter(|s| *s <= MAX_COPY).and_then(|_| copy_into(dir, f, &name));
+        note.attachments.push(Attachment { kind: AttachKind::File, name, target: f.display().to_string(), stored, size, foreign: false });
     }
     for l in links {
         let l = l.trim();
         if (l.starts_with("https://") || l.starts_with("http://")) && !note.attachments.iter().any(|a| a.kind == AttachKind::Link && a.target == l) {
-            note.attachments.push(Attachment { kind: AttachKind::Link, name: link_name(l), target: l.to_owned(), stored: None, size: None });
+            note.attachments.push(Attachment { kind: AttachKind::Link, name: link_name(l), target: l.to_owned(), stored: None, size: None, foreign: false });
         }
     }
+}
+
+/// Copy `src` into `dir` as `name` (or a numbered variant when that's taken). Returns the copy's path.
+pub(crate) fn copy_into(dir: &Path, src: &Path, name: &str) -> Option<String> {
+    std::fs::create_dir_all(dir).ok()?;
+    let mut dest = dir.join(name);
+    let mut n = 2;
+    while dest.exists() {
+        let stem = Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let ext = Path::new(name).extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        dest = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    std::fs::copy(src, &dest).ok()?;
+    Some(dest.display().to_string())
 }
 
 // ------------------------------------------------------------------ curator
@@ -1635,6 +1756,30 @@ mod tests {
         assert_eq!(get("remember that I like short names, e.g. ctx over context").map(|x| x.0), Some("Likes short names, e.g. ctx over context".to_owned()));
         assert_eq!(get("remember to run the tests in this repo").map(|x| (x.1, x.2)), Some((Kind::Procedure, true)));
         assert!(get("what do you remember?").is_none());
+    }
+
+    #[test]
+    fn memories_get_unique_uids_for_sync_and_merges_read_clearly() {
+        let mut s = store();
+        let a = s.insert(Kind::Fact, Scope::Global, "The API runs on port 8080", Origin::Learned, State::Active, 0.9, None).unwrap();
+        let b = s.insert(Kind::Fact, Scope::Global, "Deploys go out on Fridays", Origin::Learned, State::Active, 0.9, None).unwrap();
+        assert!(valid_uid(&s.get(a).unwrap().uid) && s.get(a).unwrap().uid != s.get(b).unwrap().uid);
+        // Memories saved before sync existed have none, and an import can repeat one.
+        s.get_mut(a).unwrap().uid.clear();
+        assert!(s.ensure_uids());
+        let clash = s.get(b).unwrap().uid.clone();
+        s.get_mut(a).unwrap().uid = clash;
+        assert!(s.ensure_uids());
+        assert_ne!(s.get(a).unwrap().uid, s.get(b).unwrap().uid);
+        assert!(!s.ensure_uids());
+        // Only what sync carries is listed; approval rules stay on the PC that earned them.
+        s.insert(Kind::Rule, Scope::Global, "Always allow `cargo test`", Origin::Learned, State::Active, 0.9, None);
+        assert_eq!(s.syncable().count(), 2);
+        s.archive(a, "merged");
+        s.archive(b, "Merged into another memory: same preference");
+        assert_eq!(s.get(a).unwrap().archived_reason().0, "Merged");
+        assert_eq!(s.get(b).unwrap().archived_reason(), ("Merged", Some("same preference")));
+        assert_eq!(s.syncable().count(), 0);
     }
 
     #[test]

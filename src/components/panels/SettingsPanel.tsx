@@ -7,6 +7,7 @@ import { THEMES } from '../../lib/theme';
 import type { AppDto, MemoryDto, ModelDto, Settings, TerminalShell, ThemeId, UpdateStatus } from '../../lib/types';
 import { Markdown } from '../Markdown';
 import { Icon, Toggle, copyText } from '../ui';
+import { SyncCard } from './SyncCard';
 import '../../styles/panels/settings.css';
 
 // ------------------------------------------------------------------ plumbing
@@ -988,6 +989,18 @@ function buildSections({ settings, app, update, shells, memories, toReview }: Ct
           desc: 'Review, edit and search what agents remember.',
           keywords: 'memories',
           open: () => void setSide('memory'),
+        },
+      ],
+    },
+    {
+      id: 'sync',
+      title: 'Sync',
+      rows: [
+        {
+          id: 'sync-card',
+          label: 'GitHub sync',
+          keywords: 'github git backup back up restore reinstall repository repo private cloud syncing memory notes missions preferences merge devices pc computers sign in login connect disconnect',
+          custom: <SyncCard />,
         },
       ],
     },

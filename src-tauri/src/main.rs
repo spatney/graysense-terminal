@@ -9,6 +9,7 @@ mod missions;
 mod search;
 mod sessions;
 mod settings;
+mod sync;
 mod sysmon;
 mod terminal;
 mod update;

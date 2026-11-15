@@ -798,6 +798,81 @@ pub struct MemoryStateDto {
     pub learning: usize,
 }
 
+/// GitHub sync: where it's connected, what the last sync did, and what it waits on.
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncDto {
+    /// Git is installed (sync runs it).
+    pub git: bool,
+    /// `owner/name`, once a repository is chosen.
+    pub repo: Option<String>,
+    pub url: Option<String>,
+    /// Who Graysense signs in to GitHub as.
+    pub account: Option<String>,
+    /// This PC's name, as it appears in commits.
+    pub device: String,
+    /// idle, connecting, fetching, merging, reconciling or pushing.
+    pub phase: &'static str,
+    pub busy: bool,
+    pub last_sync: Option<i64>,
+    pub last_error: Option<String>,
+    pub report: Option<SyncReportDto>,
+    /// Waiting for the user's answer.
+    pub pending: Option<SyncPendingDto>,
+    pub auto: bool,
+    pub files: bool,
+    pub settings: bool,
+    pub missions: bool,
+    /// This PC has changes the repository doesn't have yet.
+    pub changes: bool,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncReportDto {
+    pub at: i64,
+    pub pulled: usize,
+    pub removed: usize,
+    pub pushed: usize,
+    pub combined: usize,
+    pub conflicts: usize,
+    pub tidied: usize,
+    pub review: usize,
+    pub notes: Vec<String>,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum SyncPendingDto {
+    /// The repository is public: anyone could read what's synced.
+    Public { repo: String },
+    /// The repository and this PC both hold data: merge them, or take the repository's.
+    Merge { repo: String, remote: SyncCountsDto, local: SyncCountsDto, from: Option<String>, at: Option<i64> },
+    /// Most of what was synced is gone from one side: the repository (`here`, which this PC would
+    /// remove too) or this PC (`there`, which the repository would lose). Remove them, or keep them.
+    Removals { repo: String, here: usize, there: usize, known: usize },
+}
+
+#[derive(Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncCountsDto {
+    pub memories: usize,
+    pub notes: usize,
+    pub missions: usize,
+}
+
+impl From<crate::sync::Counts> for SyncCountsDto {
+    fn from(c: crate::sync::Counts) -> Self {
+        SyncCountsDto { memories: c.memories, notes: c.notes, missions: c.missions }
+    }
+}
+
+impl From<&crate::sync::Report> for SyncReportDto {
+    fn from(r: &crate::sync::Report) -> Self {
+        SyncReportDto { at: r.at, pulled: r.pulled, removed: r.removed, pushed: r.pushed, combined: r.combined, conflicts: r.conflicts, tidied: r.tidied, review: r.review, notes: r.notes.clone() }
+    }
+}
+
 #[derive(Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDto {
@@ -988,6 +1063,8 @@ pub struct UiUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<MemoryStateDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<PluginsDto>,
@@ -1010,6 +1087,7 @@ impl UiUpdate {
             && self.missions.is_none()
             && self.sessions.is_none()
             && self.memory.is_none()
+            && self.sync.is_none()
             && self.mcp.is_none()
             && self.plugins.is_none()
             && self.update.is_none()

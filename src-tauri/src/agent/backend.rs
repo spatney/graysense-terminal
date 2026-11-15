@@ -119,6 +119,8 @@ pub enum Cmd {
     DeleteSession { id: String },
     /// Run the memory curator over a conversation excerpt (already formatted).
     Learn { bay: BayId, model: Option<String>, message: String },
+    /// Ask a model to compare memories from two PCs (sync's merge). `job` names the request.
+    Reconcile { job: u64, model: Option<String>, message: String },
     Mcp(McpCmd),
     Plugin(PluginCmd),
     App(AppCmd),
@@ -308,6 +310,8 @@ pub enum Evt {
     Recalled { bay: BayId, entries: Vec<(crate::memory::MemoryId, String)> },
     /// The curator finished reading a conversation excerpt (raw JSON text, or an error).
     Learned { bay: BayId, result: Result<String, String> },
+    /// The model finished comparing memories for a sync (raw JSON text, or an error).
+    Reconciled { job: u64, result: Result<String, String> },
     /// MCP servers were added, removed or switched on or off: the core refreshes their status.
     McpChanged,
 }
@@ -687,6 +691,17 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>, self_tx: mpsc::UnboundedSende
                         tracing::warn!("memory curator failed: {e}");
                     }
                     ui.send(Evt::Learned { bay, result });
+                });
+            }
+            Cmd::Reconcile { job, model, message } => {
+                let c = client.clone().unwrap();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    let result = one_shot(&c, model, crate::sync::reconcile::RECONCILE_PROMPT, crate::sync::reconcile::schema(), message).await;
+                    if let Err(e) = &result {
+                        tracing::warn!("sync reconcile failed: {e}");
+                    }
+                    ui.send(Evt::Reconciled { job, result });
                 });
             }
             Cmd::Mcp(m) => mcp(client.clone().unwrap(), &sessions, m, ui.clone(), self_tx.clone()),
@@ -1799,7 +1814,13 @@ impl PermissionHandler for DenyAll {
 
 /// Run one curator pass in a throwaway, tool-less session and return its JSON answer.
 async fn curate(client: &Client, model: Option<String>, message: String) -> Result<String, String> {
-    // Keep the curator light and isolated: no MCP servers, skills, instructions or tools.
+    one_shot(client, model, crate::memory::CURATOR_PROMPT, crate::memory::curator_schema(), message).await
+}
+
+/// Ask a model one question in a throwaway session that has no tools, and return its answer. The
+/// answer follows `schema` (structured output). Used by the memory curator and by sync's merge.
+async fn one_shot(client: &Client, model: Option<String>, system: &str, schema: Value, message: String) -> Result<String, String> {
+    // Keep it light and isolated: no MCP servers, skills, instructions or tools.
     let servers: Vec<String> = client.rpc().mcp().config().list().await.ok().map(|l| l.servers.keys().cloned().collect()).unwrap_or_default();
     let mut config = SessionConfig::default()
         .with_client_name(CURATOR_CLIENT)
@@ -1811,16 +1832,16 @@ async fn curate(client: &Client, model: Option<String>, message: String) -> Resu
         .with_disabled_mcp_servers(servers.into_iter().chain(["github-mcp-server".to_owned()]))
         .with_available_tools(["graysense_none"])
         .with_permission_handler(Arc::new(DenyAll))
-        .with_system_message(github_copilot_sdk::SystemMessageConfig::new().with_mode("replace").with_content(crate::memory::CURATOR_PROMPT));
+        .with_system_message(github_copilot_sdk::SystemMessageConfig::new().with_mode("replace").with_content(system));
     if let Some(model) = model {
         config = config.with_model(model);
     }
     let session = client.create_session(config).await.map_err(|e| e.to_string())?;
     let id = session.id().clone();
-    let opts = github_copilot_sdk::MessageOptions::new(message).with_response_schema(crate::memory::curator_schema()).with_wait_timeout(std::time::Duration::from_secs(120));
+    let opts = github_copilot_sdk::MessageOptions::new(message).with_response_schema(schema).with_wait_timeout(std::time::Duration::from_secs(120));
     let result = session.send_and_wait(opts).await;
     let _ = session.disconnect().await;
     let _ = client.delete_session(&id).await;
-    let event = result.map_err(|e| e.to_string())?.ok_or_else(|| "the curator returned nothing".to_owned())?;
+    let event = result.map_err(|e| e.to_string())?.ok_or_else(|| "the model returned nothing".to_owned())?;
     Ok(event.data.get("content").and_then(|v| v.as_str()).unwrap_or_default().to_owned())
 }

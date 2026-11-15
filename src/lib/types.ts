@@ -323,6 +323,75 @@ export interface MemoryStateDto {
   learning: number;
 }
 
+export interface SyncCounts {
+  memories: number;
+  notes: number;
+  missions: number;
+}
+
+/** What the last sync did. */
+export interface SyncReport {
+  /** Unix seconds. */
+  at: number;
+  /** Memories, notes and missions added or changed on this PC. */
+  pulled: number;
+  /** Removed on this PC (removed elsewhere, or combined). */
+  removed: number;
+  /** Files added, changed or removed in the repository. */
+  pushed: number;
+  /** Duplicates found by comparing text. */
+  combined: number;
+  /** Things both PCs changed, settled by rules. */
+  conflicts: number;
+  /** Memories the AI combined or retired. */
+  tidied: number;
+  /** Changes the AI left in the Memory review inbox. */
+  review: number;
+  /** Anything the user should know: files left out, items skipped, an AI step that didn't run. */
+  notes: string[];
+}
+
+/** Something sync is waiting on the user for (answer it with `syncAnswer`). */
+export type SyncPending =
+  /** The repository is public: `public` goes ahead anyway, `cancel` gives up. */
+  | { kind: 'public'; repo: string }
+  /** The repository and this PC both hold data: `merge` (with AI), `replace` (take the repository's), or `cancel`. */
+  | { kind: 'merge'; repo: string; remote: SyncCounts; local: SyncCounts; from: string | null; at: number | null }
+  /**
+   * Most of what was synced is gone from one side: `here` of it from the repository (this PC would
+   * remove it too), `there` of it from this PC (the repository would lose it), out of `known`.
+   * `keep` puts it back, `remove` goes ahead, `cancel` leaves it for now.
+   */
+  | { kind: 'removals'; repo: string; here: number; there: number; known: number };
+
+/** GitHub sync (Rust `SyncDto`). */
+export interface SyncDto {
+  /** Git is installed (sync runs it). */
+  git: boolean;
+  /** `owner/name`, once a repository is chosen. */
+  repo: string | null;
+  url: string | null;
+  /** Who Graysense signs in to GitHub as, like "GitHub CLI (octocat)". */
+  account: string | null;
+  /** This PC's name as it appears in commits. */
+  device: string;
+  phase: 'idle' | 'connecting' | 'fetching' | 'merging' | 'reconciling' | 'pushing';
+  busy: boolean;
+  /** Unix seconds. */
+  lastSync: number | null;
+  lastError: string | null;
+  report: SyncReport | null;
+  pending: SyncPending | null;
+  /** Sync in the background. */
+  auto: boolean;
+  /** Keep the files attached to notes in the repository too. */
+  files: boolean;
+  settings: boolean;
+  missions: boolean;
+  /** This PC has changes the repository doesn't have yet. */
+  changes: boolean;
+}
+
 /** A Rust `Result` as serde writes it. */
 export type Result<T> = { Ok: T } | { Err: string };
 
@@ -487,6 +556,7 @@ export interface UiUpdate {
   missions?: MissionDto[];
   sessions?: SessionsDto;
   memory?: MemoryStateDto;
+  sync?: SyncDto;
   mcp?: McpDto;
   plugins?: PluginsDto;
   update?: UpdateStatus;
@@ -602,6 +672,13 @@ export type Action =
   | { type: 'memoryClearAll' }
   | { type: 'memoryExport'; path: string; markdown: boolean }
   | { type: 'memoryImport'; path: string }
+  /** Connect to a repository (`owner/name` or its github.com address), or with `create` make a new private one named `repo`. */
+  | { type: 'syncConnect'; repo: string; create: boolean }
+  /** Answer what sync is waiting on (`SyncDto.pending`). */
+  | { type: 'syncAnswer'; choice: 'merge' | 'replace' | 'public' | 'keep' | 'remove' | 'cancel' }
+  | { type: 'syncNow' }
+  | { type: 'syncDisconnect' }
+  | { type: 'syncOptions'; auto?: boolean; files?: boolean; settings?: boolean; missions?: boolean }
   | { type: 'noteAdd'; text: string; files?: string[]; links?: string[]; project?: string | null; session?: string | null; title?: string | null }
   | { type: 'noteAttach'; id: number; files?: string[]; links?: string[] }
   | { type: 'noteDetach'; id: number; index: number }

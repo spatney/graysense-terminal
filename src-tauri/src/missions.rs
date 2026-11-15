@@ -18,6 +18,9 @@ pub enum Status {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Mission {
     pub id: u64,
+    /// The same on every PC that syncs this mission (`id` is only unique here).
+    #[serde(default)]
+    pub uid: String,
     pub title: String,
     #[serde(default)]
     pub notes: String,
@@ -49,6 +52,7 @@ pub struct MissionBoard {
     pub missions: Vec<Mission>,
     next_id: u64,
     dirty: bool,
+    path: PathBuf,
 }
 
 fn path() -> PathBuf {
@@ -69,17 +73,48 @@ pub fn split_capture(text: &str) -> (String, String) {
 
 impl MissionBoard {
     pub fn load() -> Self {
-        let stored: Stored = read_json(&path()).unwrap_or_default();
+        Self::load_from(path())
+    }
+
+    /// The board kept in `path`.
+    pub fn load_from(path: PathBuf) -> Self {
+        let stored: Stored = read_json(&path).unwrap_or_default();
         let next_id = stored.next_id.max(stored.missions.iter().map(|m| m.id + 1).max().unwrap_or(1));
-        MissionBoard { missions: stored.missions, next_id, dirty: false }
+        MissionBoard { missions: stored.missions, next_id, dirty: false, path }
     }
 
     pub fn save_if_dirty(&mut self) {
         if self.dirty {
             let stored = Stored { missions: self.missions.clone(), next_id: self.next_id };
-            write_json(&path(), &stored);
+            write_json(&self.path, &stored);
             self.dirty = false;
         }
+    }
+
+    /// Give every mission a uid of its own (older ones have none). Returns whether any changed.
+    pub fn ensure_uids(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut changed = false;
+        for m in self.missions.iter_mut() {
+            if !crate::memory::valid_uid(&m.uid) || !seen.insert(m.uid.clone()) {
+                m.uid = crate::memory::new_uid();
+                seen.insert(m.uid.clone());
+                changed = true;
+            }
+        }
+        self.dirty |= changed;
+        changed
+    }
+
+    /// The next free id (sync adds missions that arrive from the repository).
+    pub(crate) fn alloc_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub(crate) fn touch(&mut self) {
+        self.dirty = true;
     }
 
     pub fn add(&mut self, title: &str, notes: &str, from_agent: bool) -> u64 {
@@ -87,6 +122,7 @@ impl MissionBoard {
         self.next_id += 1;
         self.missions.insert(0, Mission {
             id,
+            uid: crate::memory::new_uid(),
             title: title.trim().to_owned(),
             notes: notes.trim().to_owned(),
             dir: None,

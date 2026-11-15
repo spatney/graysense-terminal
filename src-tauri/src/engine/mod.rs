@@ -5,6 +5,7 @@
 pub mod actions;
 pub mod dto;
 mod learn;
+mod syncer;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -181,6 +182,7 @@ struct Sent {
     settings: u64,
     bays: u64,
     missions: u64,
+    sync: u64,
     memory: Option<u64>,
     update: Option<crate::update::UpdateStatus>,
     items: HashMap<BayId, Vec<u64>>,
@@ -272,6 +274,8 @@ pub struct Core {
     memory: Arc<Mutex<MemoryStore>>,
     memory_last_run: Option<(i64, Option<String>)>,
     learn_jobs: HashMap<BayId, LearnJob>,
+    /// GitHub sync: the repository, what the last sync did, and the one in progress.
+    sync: syncer::Syncer,
     session_index: SessionIndex,
     sessions: Vec<SessionInfo>,
     sessions_loaded: bool,
@@ -333,6 +337,7 @@ impl Core {
             memory: Arc::new(Mutex::new(MemoryStore::load())),
             memory_last_run: None,
             learn_jobs: HashMap::new(),
+            sync: syncer::Syncer::new(),
             session_index: SessionIndex::load(),
             sessions: Vec::new(),
             sessions_loaded: false,
@@ -697,10 +702,15 @@ impl Core {
         self.backend.send(Cmd::NameSession { bay, name, user });
     }
 
-    /// Memory scope for a folder: every session folder shares the sessions folder's scope.
+    /// Memory scope for a folder: every session folder shares the sessions folder's scope. A
+    /// folder that's a clone of a repository claims the memories synced from that repository.
     fn project_for(&self, dir: &Path) -> Project {
         let root = self.settings.sessions_root();
-        Project::for_dir(if sessions::is_under(dir, &root) { &root } else { dir })
+        let project = Project::for_dir(if sessions::is_under(dir, &root) { &root } else { dir });
+        if let Some(remote) = crate::sync::projects::git_remote(&project.root) {
+            self.memory.lock().adopt_project(&remote, &project.key);
+        }
+        project
     }
 
     fn agent_spec(&self, view: &AgentView, prompt: Option<String>, files: Vec<PathBuf>, resume: Option<String>) -> AgentSpec {
@@ -1270,6 +1280,7 @@ impl Core {
                 }
             }
             Evt::Learned { bay, result } => self.finish_learning(bay, result),
+            Evt::Reconciled { job, result } => self.sync_reconciled(job, result),
             Evt::McpChanged => self.refresh_mcp(),
         }
     }
@@ -1365,6 +1376,7 @@ impl Core {
             self.refresh_mcp();
         }
         self.memory_tick();
+        self.sync_tick();
         if self.last_save.elapsed() > Duration::from_secs(3) {
             self.save();
             self.last_save = Instant::now();
@@ -1575,6 +1587,12 @@ impl Core {
             self.sent.memory = Some(rev);
             u.memory = Some(self.memory_dto());
         }
+        let sync = self.sync_dto();
+        let s = sig(&sync);
+        if s != self.sent.sync {
+            self.sent.sync = s;
+            u.sync = Some(sync);
+        }
         if std::mem::take(&mut self.dirty.mcp) {
             u.mcp = Some(self.mcp_dto());
         }
@@ -1624,6 +1642,7 @@ impl Core {
             missions: Some(self.missions.missions.iter().map(mission_dto).collect()),
             sessions: Some(self.sessions_dto()),
             memory: Some(self.memory_dto()),
+            sync: Some(self.sync_dto()),
             mcp: Some(self.mcp_dto()),
             plugins: Some(self.plugins_dto()),
             update: Some(self.updater.status()),

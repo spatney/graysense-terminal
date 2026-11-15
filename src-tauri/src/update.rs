@@ -354,16 +354,16 @@ fn explain(error: &str, signed_in: &[String]) -> String {
     }
 }
 
-/// A way to sign in to GitHub for update checks.
-struct Credential {
+/// A way to sign in to GitHub.
+pub(crate) struct Credential {
     /// Shown in Settings ("GitHub CLI (octocat)"), never the token itself.
-    label: String,
-    token: Option<String>,
+    pub(crate) label: String,
+    pub(crate) token: Option<String>,
 }
 
 /// Sign-ins to try, best first: explicit tokens, each GitHub CLI account (the active one first),
 /// then none, which is enough for a public repository.
-fn credentials() -> Vec<Credential> {
+pub(crate) fn credentials() -> Vec<Credential> {
     let mut out: Vec<Credential> = Vec::new();
     let mut add = |label: String, token: Option<String>| {
         let token = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
@@ -389,7 +389,7 @@ fn credentials() -> Vec<Credential> {
 
 /// The GitHub CLI: on PATH, or where its installers put it (an app started before gh was
 /// installed can have an older PATH).
-fn gh_exe() -> Option<PathBuf> {
+pub(crate) fn gh_exe() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "gh.exe" } else { "gh" };
     let on_path: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).map(|d| d.join(exe)).collect()).unwrap_or_default();
     let known = [

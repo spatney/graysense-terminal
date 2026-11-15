@@ -1,6 +1,7 @@
 import { act, restartToUpdate, setSide } from '../lib/api';
-import { bytes, human, modelLabel } from '../lib/format';
+import { agoLong, bytes, human, modelLabel } from '../lib/format';
 import { focusComposer, openOverlay, useUi } from '../lib/store';
+import { showSyncSettings } from './panels/SyncCard';
 import { Icon } from './ui';
 
 function Spark({ values }: { values: number[] }) {
@@ -23,6 +24,7 @@ export function StatusBar() {
   const stats = useUi((s) => s.stats);
   const cpu = useUi((s) => s.cpuHistory);
   const learning = useUi((s) => s.memory.learning);
+  const sync = useUi((s) => s.sync);
   if (!app || !settings) return null;
   const focused = bays.find((b) => b.id === app.focused);
   const working = bays.filter((b) => b.agent?.status.busy);
@@ -87,6 +89,17 @@ export function StatusBar() {
         </>
       )}
       <span className="status-spacer" />
+      {sync?.repo && (
+        <button
+          type="button"
+          className={`status-item ${sync.lastError || sync.pending ? 'warn' : ''}`}
+          data-tip={sync.pending ? 'GitHub sync is waiting for you' : (sync.lastError ?? (sync.busy ? 'Syncing with GitHub…' : `Synced with ${sync.repo}${sync.lastSync ? `. Last sync ${agoLong(sync.lastSync)}` : ''}`))}
+          onClick={() => void showSyncSettings()}
+        >
+          {sync.busy ? <span className="spinner sm" /> : <Icon name={sync.lastError || sync.pending ? 'warning' : 'cloud'} />}
+          {sync.busy ? <span className="shimmer">Syncing…</span> : sync.pending ? 'Sync needs you' : sync.lastError ? 'Sync failed' : sync.changes ? 'Sync pending' : 'Synced'}
+        </button>
+      )}
       <button type="button" className={`status-item ${settings['memory.enabled'] ? '' : 'warn'}`} data-tip={settings['memory.enabled'] ? 'Memory is on' : 'Memory is off'} onClick={() => void setSide('memory')}>
         <Icon name="lightbulb-sparkle" />
         {learning > 0 ? <span className="shimmer">Learning…</span> : settings['memory.enabled'] ? 'Memory' : 'Memory off'}

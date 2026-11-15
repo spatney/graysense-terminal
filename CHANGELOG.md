@@ -3,6 +3,29 @@
 Each version's section is its release notes: on GitHub, and in Graysense's "What's new" when an
 update is ready.
 
+## 0.3.0 — 2026-11-14
+
+- **Keep your memory in a GitHub repository**: in **Settings › Sync**, connect Graysense to a
+  private repository (it can create one for you) and your memories, notes, projects, missions and
+  a short list of preferences are saved there and shared by every PC you connect. It uses the Git
+  and `gh` sign-in you already have; Graysense never asks for a token. Sync runs on its own after
+  a change, when it starts and every so often, and **Sync now** does it on request. Each part can
+  be switched off, and the status bar shows when everything is up to date.
+- **Merge with AI**: connect a repository that already holds Graysense data and the two sets are
+  reconciled instead of one replacing the other. Anything only one side has is kept, an item both
+  sides changed keeps the version with your own words (or else the newer one), and duplicates and
+  contradictions are sorted out by your curator model. Memories you wrote or pinned are never
+  changed behind your back: the AI's suggestions for them wait in **Review**. Notes are never
+  rewritten. A copy of what was on this PC is kept first, and **Use the repository's copy** starts
+  over from the repository instead.
+- **Made to be safe**: only private repositories are used unless you confirm otherwise, approval
+  rules, shell access, Approve all and anything that looks like a secret are never synced, and
+  what comes back from the repository is checked before it is used: network paths are never
+  opened, and a file that a note names on another PC is never handed to an agent. A sync that
+  would remove most of what it keeps in step, because the repository was deleted and made again
+  or this PC's memory file wouldn't load, stops and asks first. A git step that stops answering
+  is stopped, with everything it started.
+
 ## 0.2.5 — 2026-11-14
 
 - **Rows stay put on hover**: pointing at an installed plugin no longer makes its row taller (and

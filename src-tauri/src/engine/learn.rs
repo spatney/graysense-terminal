@@ -100,7 +100,7 @@ impl Core {
     }
 
     /// The model the curator should use: the user's pick, else the cheapest available.
-    fn curator_model(&self) -> Option<String> {
+    pub(super) fn curator_model(&self) -> Option<String> {
         if let Some(m) = &self.settings.memory.model {
             return Some(m.clone());
         }

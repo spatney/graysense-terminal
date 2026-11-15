@@ -12,6 +12,7 @@ import type {
   SessionsDto,
   Settings,
   StatsDto,
+  SyncDto,
   ToastDto,
   UiUpdate,
   UpdateStatus,
@@ -46,6 +47,8 @@ interface UiState {
   missions: MissionDto[];
   sessions: SessionsDto;
   memory: MemoryStateDto;
+  /** GitHub sync; null until the core says. */
+  sync: SyncDto | null;
   mcp: McpDto | null;
   plugins: PluginsDto | null;
   update: UpdateStatus | null;
@@ -81,6 +84,7 @@ export const useUi = create<UiState>(() => ({
   missions: [],
   sessions: empty.sessions,
   memory: empty.memory,
+  sync: null,
   mcp: null,
   plugins: null,
   update: null,
@@ -106,6 +110,7 @@ export function applyUpdate(u: UiUpdate) {
     if (u.missions) next.missions = u.missions;
     if (u.sessions) next.sessions = u.sessions;
     if (u.memory) next.memory = u.memory;
+    if (u.sync) next.sync = u.sync;
     if (u.mcp) next.mcp = u.mcp;
     if (u.plugins) next.plugins = u.plugins;
     if (u.update) next.update = u.update;
