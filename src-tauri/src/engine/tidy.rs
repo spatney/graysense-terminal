@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{BayKind, Core};
+use super::{BayKind, Core, plural};
 use crate::agent::Level;
 use crate::agent::backend::{ClientState, Cmd};
 use crate::memory::{self, Memory, MemoryId, Scope, Source, State as MemoryState};
@@ -71,10 +71,6 @@ fn scope_label(scope: &Scope) -> String {
         Scope::Global => "the user".into(),
         Scope::Project(key) => format!("the project {}", std::path::Path::new(key).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| key.clone())),
     }
-}
-
-fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 impl Core {

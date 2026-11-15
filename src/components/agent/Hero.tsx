@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { act, setSide } from '../../lib/api';
+import { act, setSide, startInWorktree } from '../../lib/api';
 import { ago, shortPath } from '../../lib/format';
 import { focusComposer, setDraft, useUi } from '../../lib/store';
 import type { BayDto } from '../../lib/types';
@@ -72,6 +72,22 @@ export function Hero({ bay }: { bay: BayDto | null }) {
               {where.lead} {shortPath(where.path, home)}
             </span>
           </button>
+        )}
+        {agent?.overlap && (
+          <div className="hero-overlap" role="status">
+            <Icon name="warning" />
+            <span className="grow">{agent.overlap.text}</span>
+            {agent.overlap.worktree && (
+              <button
+                type="button"
+                className="btn sm"
+                data-tip="Close this session and open one that gets a worktree of the repository on a branch of its own when you send the first message, so the agents don't change each other's files"
+                onClick={() => void startInWorktree(id)}
+              >
+                <Icon name="git-branch" /> Start in a worktree instead
+              </button>
+            )}
+          </div>
         )}
       </div>
       <Composer bay={bay} autoFocus />

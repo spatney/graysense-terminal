@@ -4,7 +4,7 @@ pub mod backend;
 pub mod forms;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -193,6 +193,13 @@ impl ToolCard {
             .or_else(|| self.error.as_deref().and_then(|e| output_lines(e).next()))
             .or_else(|| output_lines(printed).last())?;
         Some(crate::memory::redact_secrets(&trunc(line, 160)))
+    }
+
+    /// The files the tool created or edited: the one it was asked to write, and those it reported
+    /// writing when it finished (a patch names its files only then).
+    fn changed_paths(&self) -> Vec<String> {
+        let asked = matches!(self.name.as_str(), "edit" | "create" | "apply_patch").then(|| s(&self.args, "path")).flatten();
+        asked.into_iter().chain(self.files.iter().filter(|f| f.kind != "delete").map(|f| f.path.clone())).collect()
     }
 }
 
@@ -470,6 +477,18 @@ pub struct AgentView {
     pub worktree_from: Option<PathBuf>,
     /// What's being done to the worktree (making it, merging…), while it's done.
     pub worktree_busy: Option<&'static str>,
+    /// Other agents were changing files where this one started (or moved to); shown until its
+    /// first message.
+    pub overlap: Option<Overlap>,
+}
+
+/// Agents changing files in the same place as another one (see `engine::overlap`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Overlap {
+    /// The other agents' bays, the busiest first.
+    pub with: Vec<BayId>,
+    /// The place is a git repository, so the session can start over in a worktree of its own.
+    pub repo: bool,
 }
 
 /// An MCP App view docked in an agent bay.
@@ -633,6 +652,7 @@ impl AgentView {
             worktree,
             worktree_from: None,
             worktree_busy: None,
+            overlap: None,
         }
     }
 
@@ -688,6 +708,23 @@ impl AgentView {
     /// Messages sent mid-turn that the agent hasn't read yet, oldest first.
     pub fn queued(&self) -> impl Iterator<Item = &QueuedMessage> {
         self.local_echo.iter().filter(|e| e.queued).map(|e| &e.message)
+    }
+
+    /// A message was sent that the runtime hasn't echoed yet (one starting the session, too).
+    pub fn message_on_its_way(&self) -> bool {
+        !self.local_echo.is_empty()
+    }
+
+    /// Add a file the agent changed to the session's list, once however the tools wrote its path.
+    fn note_changed(&mut self, path: String) {
+        let key = |p: &str| {
+            let p = Path::new(p);
+            crate::memory::project_key(&if p.is_relative() { self.cwd.join(p) } else { p.to_path_buf() })
+        };
+        let k = key(&path);
+        if !self.files.iter().any(|f| key(f) == k) {
+            self.files.push(path);
+        }
     }
 
     /// Put the messages still waiting into the transcript, once the turn they waited on is over
@@ -803,14 +840,14 @@ impl AgentView {
         self.sub_by_agent.retain(|_, i| *i < index);
         self.local_echo.clear();
         self.files.clear();
+        let mut changed = Vec::new();
         for item in &self.items {
-            if let Item::Tool(c) = item
-                && matches!(c.name.as_str(), "edit" | "create" | "apply_patch")
-                && let Some(p) = s(&c.args, "path")
-                && !self.files.contains(&p)
-            {
-                self.files.push(p);
+            if let Item::Tool(c) = item {
+                changed.extend(c.changed_paths());
             }
+        }
+        for p in changed {
+            self.note_changed(p);
         }
         if self.learn_cursor != usize::MAX {
             self.learn_cursor = self.learn_cursor.min(index);
@@ -1135,9 +1172,9 @@ impl AgentView {
                 let title = s(d, "toolTitle");
                 if matches!(name.as_str(), "edit" | "create" | "apply_patch")
                     && let Some(p) = s(&args, "path")
-                        && !self.files.contains(&p) {
-                            self.files.push(p);
-                        }
+                {
+                    self.note_changed(p);
+                }
                 let target = tool_target(&name, &args);
                 self.tool_count += 1;
                 self.status = Status::Tool(tool_verb(&name).to_lowercase());
@@ -1198,6 +1235,7 @@ impl AgentView {
                 let ok = d.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
                 let result = d.get("result").cloned().unwrap_or(Value::Null);
                 let ui_resource = result.get("uiResource").cloned().filter(|v| !v.is_null());
+                let mut edited = Vec::new();
                 if let Some(Item::Tool(card)) = self.index.get(&id).copied().and_then(|i| self.items.get_mut(i)) {
                     card.state = if ok { ToolState::Ok } else { ToolState::Failed };
                     card.elapsed = Some(card.started.elapsed().as_secs_f32());
@@ -1217,6 +1255,7 @@ impl AgentView {
                             })
                             .collect();
                     }
+                    edited = card.changed_paths();
                     card.lines = line_counts(d);
                     if let Some(res) = ui_resource {
                         card.has_app = true;
@@ -1235,6 +1274,9 @@ impl AgentView {
                         let name = card.name.clone();
                         fx.push(self.log(Level::Warn, format!("{name} failed · {}", trunc(&msg, 60))));
                     }
+                }
+                for p in edited {
+                    self.note_changed(p);
                 }
                 if matches!(self.status, Status::Tool(_)) {
                     self.status = Status::Thinking;
@@ -1485,6 +1527,11 @@ mod tests {
         let files: Vec<(&str, &str)> = card.files.iter().map(|f| (f.path.as_str(), f.kind)).collect();
         assert_eq!(files, [(r"C:\app\a.ts", "edit"), (r"C:\app\b.ts", "create"), (r"C:\app\c.md", "delete")]);
         assert_eq!(card.lines, Some((120, 19)));
+        // The session's changed files: those the patch wrote (not the one it deleted), each once
+        // however a tool writes its path.
+        assert_eq!(v.files, [r"C:\app\a.ts", r"C:\app\b.ts"]);
+        v.apply(&ev("3", "tool.execution_start", json!({ "toolCallId": "t2", "toolName": "edit", "arguments": { "path": "C:/App/A.ts" } })));
+        assert_eq!(v.files, [r"C:\app\a.ts", r"C:\app\b.ts"]);
     }
 
     #[test]

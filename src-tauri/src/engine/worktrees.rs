@@ -69,11 +69,6 @@ enum Done {
     Removed(Result<(), String>),
 }
 
-/// The top folder of the work tree `dir` is in.
-fn top_of(dir: &Path) -> PathBuf {
-    dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(dir).to_path_buf()
-}
-
 /// Where a file attached from the work tree `top` is in the worktree `to` (if it's there too;
 /// otherwise where it was).
 fn moved(path: &Path, top: &Path, to: &Path) -> PathBuf {
@@ -167,6 +162,45 @@ impl Core {
         Ok(bay)
     }
 
+    /// Start a session that hasn't had a message over in a worktree of its own, made from its
+    /// folder's repository with its first message: a new session takes its place, with the same
+    /// choices, and it closes. Returns the new session's bay.
+    pub(super) fn restart_in_worktree(&mut self, bay: BayId) -> Result<BayId, String> {
+        let v = self.agent(bay).ok_or("That agent is closed.")?;
+        if v.worktree_from.is_some() {
+            return Ok(bay);
+        }
+        if v.has_history {
+            return Err("This session has started already: fork it into a worktree instead.".into());
+        }
+        let from = v.cwd.clone();
+        if v.deferred || !worktree::in_repo(&from) {
+            return Err(format!("{} isn't in a Git repository, so this session can't have a worktree of its own.", short_path(&from)));
+        }
+        let (model, effort, tier, mode, name, incognito) = (v.model.clone(), v.effort.clone(), v.context_tier.clone(), v.mode, v.name.clone(), v.incognito);
+        let (attachments, auto) = (v.attachments.clone(), v.auto_approve.load(Ordering::Relaxed));
+        let at = self.bay_index(bay);
+        let fresh = self.next_bay;
+        let new = self.new_worktree_session(from);
+        if let Some(n) = self.agent_mut(new) {
+            // One already waiting for a first message in that repository keeps what was chosen for it.
+            if new >= fresh {
+                (n.model, n.effort, n.context_tier, n.mode, n.name, n.incognito) = (model, effort, tier, mode, name, incognito);
+                n.auto_approve.store(auto, Ordering::Relaxed);
+            }
+            n.attachments.extend(attachments);
+        }
+        self.close_with_worktree(bay, None);
+        // In the closed one's place.
+        if let (Some(at), Some(i)) = (at, self.bay_index(new)) {
+            let b = self.bays.remove(i);
+            let at = if i < at { at - 1 } else { at };
+            self.bays.insert(at.min(self.bays.len()), b);
+        }
+        self.focus(new);
+        Ok(new)
+    }
+
     /// Launch a mission in a new session with a worktree of its own, made from the mission's folder.
     pub(super) fn launch_mission_in_worktree(&mut self, id: u64) -> Result<(), String> {
         let m = self.missions.get(id).cloned().ok_or("That mission no longer exists.")?;
@@ -224,7 +258,7 @@ impl Core {
         };
         let project = self.project_for(&created.cwd);
         let (enabled, memory) = (self.settings.memory.enabled, self.memory.clone());
-        let top = top_of(&from);
+        let top = worktree::top_of(&from);
         let files: Vec<PathBuf> = files.iter().map(|p| moved(p, &top, &created.info.path)).collect();
         let info = created.info;
         let Some(v) = self.agent_mut(bay) else { return };
@@ -282,7 +316,7 @@ impl Core {
         }
         // The message it was forked before keeps its files, as they are in the worktree.
         if let Some(from) = &created.info.forked_from {
-            let top = top_of(from);
+            let top = worktree::top_of(from);
             job.files = job.files.iter().map(|f| moved(Path::new(f), &top, &created.info.path).display().to_string()).collect();
         }
         job.cwd = Some(created.cwd);

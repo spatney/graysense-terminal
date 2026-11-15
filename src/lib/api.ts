@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { applyUpdate, focusComposer, openOverlay, toast, useUi } from './store';
+import { applyUpdate, fillDraft, focusComposer, openOverlay, toast, useUi } from './store';
 import { plural, shortPath } from './format';
 import type { Action, BayId, DirEntry, PanelId, SearchHit, Settings, UiUpdate, WorktreeReview } from './types';
 
@@ -175,6 +175,23 @@ export async function newAgent(dir: string, worktree = false) {
 export async function newAgentInWorktreeOf() {
   const dir = await pickFolder('Choose a repository for the worktree', useUi.getState().app?.defaultDir);
   if (dir) await newAgent(dir, true);
+}
+
+/**
+ * Start a session that hasn't had a message over in a worktree of its own (when other agents are
+ * changing files where it is): a new session takes its place, with the message being written.
+ */
+export async function startInWorktree(bay: BayId) {
+  const next = await act<BayId>({ type: 'startInWorktree', bay });
+  if (next == null) return;
+  const draft = next === bay ? '' : (useUi.getState().drafts[bay] ?? '');
+  if (!draft.trim()) return focusComposer(next);
+  useUi.setState((s) => {
+    const drafts = { ...s.drafts };
+    delete drafts[bay];
+    return { drafts };
+  });
+  fillDraft(next, draft);
 }
 
 /**

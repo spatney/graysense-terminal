@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { learnsIn, setProjectLearning } from './api';
+import { learnsIn, setProjectLearning, startInWorktree } from './api';
 import { useUi } from './store';
 import type { Settings } from './types';
 
@@ -31,5 +31,24 @@ describe('learning per project', () => {
     await setProjectLearning('c:\\code\\app', true);
     expect(sent()).toEqual([{ type: 'setSettings', changes: { 'memory.no_learn_projects': ['c:\\client'] } }]);
     expect(useUi.getState().toasts).toEqual([]);
+  });
+});
+
+describe('starting over in a worktree', () => {
+  it('gives the message being written to the session that takes its place', async () => {
+    useUi.setState({ drafts: { 4: 'fix the login flow', 5: 'something else' }, focusTick: {} });
+    vi.mocked(invoke).mockResolvedValueOnce(9);
+    await startInWorktree(4);
+    expect(sent()).toEqual([{ type: 'startInWorktree', bay: 4 }]);
+    expect(useUi.getState().drafts).toEqual({ 5: 'something else', 9: 'fix the login flow' });
+    expect(useUi.getState().focusTick).toEqual({ 9: 1 });
+  });
+
+  it('keeps it where it is when the session can’t start over', async () => {
+    useUi.setState({ drafts: { 4: 'fix the login flow' }, focusTick: {} });
+    vi.mocked(invoke).mockRejectedValueOnce('This session has started already: fork it into a worktree instead.');
+    await startInWorktree(4);
+    expect(useUi.getState().drafts).toEqual({ 4: 'fix the login flow' });
+    expect(useUi.getState().toasts.map((t) => t.text)).toEqual(['This session has started already: fork it into a worktree instead.']);
   });
 });

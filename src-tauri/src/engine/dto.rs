@@ -641,6 +641,17 @@ pub struct AgentDto {
     pub premium_cost: Option<f64>,
     /// The worktree of its own the session works in (or will, once its first message is sent).
     pub worktree: Option<WorktreeDto>,
+    /// Other agents are changing files where this empty session works.
+    pub overlap: Option<OverlapDto>,
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlapDto {
+    /// Who's changing files there ("“Fix login” is changing files in this repository too…").
+    pub text: String,
+    /// The session can start over in a worktree of its own instead.
+    pub worktree: bool,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -794,6 +805,8 @@ pub fn agent_dto(v: &AgentView) -> AgentDto {
         resumable: v.session_id.is_some() && v.has_history,
         premium_cost: v.premium_cost,
         worktree: worktree_dto(v),
+        // It depends on other agents: the core fills it in.
+        overlap: None,
     }
 }
 

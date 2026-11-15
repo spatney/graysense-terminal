@@ -6,6 +6,7 @@ pub mod actions;
 pub mod dto;
 mod fork;
 mod learn;
+mod overlap;
 mod rewind;
 mod syncer;
 mod tidy;
@@ -455,7 +456,7 @@ impl Core {
                             None => self.new_session(None, incognito),
                         }
                     } else if cwd.is_dir() {
-                        self.new_agent(cwd, None, session_id, None, incognito)
+                        self.open_agent(cwd, None, session_id, None, incognito, |_| {})
                     } else {
                         continue;
                     };
@@ -573,8 +574,15 @@ impl Core {
         self.dirty.sessions = true;
     }
 
+    /// A new agent working in `cwd` (or a past session reopened, `resume`). A new one says when
+    /// other agents are changing files there.
     pub fn new_agent(&mut self, cwd: PathBuf, prompt: Option<String>, resume: Option<String>, mission: Option<u64>, incognito: bool) -> BayId {
-        self.open_agent(cwd, prompt, resume, mission, incognito, |_| {})
+        let new = resume.is_none();
+        let bay = self.open_agent(cwd, prompt, resume, mission, incognito, |_| {});
+        if new {
+            self.note_overlap(bay);
+        }
+        bay
     }
 
     /// [`Core::new_agent`], with `setup` choosing more for the session before it starts.
@@ -659,6 +667,7 @@ impl Core {
             if self.models.is_empty() {
                 self.backend.send(Cmd::ListModels);
             }
+            self.note_overlap(bay);
             return Ok(());
         }
         if crate::memory::project_key(&v.cwd) == crate::memory::project_key(&dir) {
@@ -1208,6 +1217,9 @@ impl Core {
                 }
                 self.remember_dir(&dir);
                 self.dirty.sessions = true;
+                if moved {
+                    self.note_overlap(bay);
+                }
             }
             Evt::Event { bay, ev } => {
                 // A new session started without a model says which one the runtime picks (a resumed
@@ -1615,7 +1627,7 @@ impl Core {
                 cwd: b.cwd().display().to_string(),
                 folder: sessions::display_path(b.cwd(), &root),
                 agent: match &b.kind {
-                    BayKind::Agent(v) => Some(agent_dto(v)),
+                    BayKind::Agent(v) => Some(AgentDto { overlap: self.overlap_dto(v), ..agent_dto(v) }),
                     BayKind::Shell(_) => None,
                 },
                 shell: match &b.kind {
@@ -1847,6 +1859,11 @@ fn tier_for(models: &[ModelInfo], model: Option<&str>, wanted: Option<String>) -
 /// The id of a terminal bay's shell in [`Terminals`].
 pub fn terminal_id(bay: BayId) -> String {
     format!("bay-{bay}")
+}
+
+/// "1 file", "3 files".
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 /// Hand a flush's results to the window (on the courier's thread: window calls wait for the

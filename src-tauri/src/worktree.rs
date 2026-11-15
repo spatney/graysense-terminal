@@ -843,6 +843,12 @@ pub fn in_repo(dir: &Path) -> bool {
     dir.ancestors().any(|d| d.join(".git").exists())
 }
 
+/// The top folder of the git work tree `dir` is in (a worktree is one of its own), or `dir`
+/// itself outside one.
+pub fn top_of(dir: &Path) -> PathBuf {
+    dir.ancestors().find(|d| d.join(".git").exists()).unwrap_or(dir).to_path_buf()
+}
+
 /// What the agent is told about working in a worktree (added to its system message).
 pub fn instructions(info: &Info) -> String {
     let base = info.base_branch.as_deref().map(|b| format!(" It started from `{b}`.")).unwrap_or_default();

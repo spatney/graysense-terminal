@@ -68,6 +68,9 @@ pub enum Action {
     WorktreeMerge { bay: BayId, #[serde(default)] message: String, #[serde(default)] close: bool },
     /// Push the session's worktree branch and open the page for a pull request.
     WorktreePublish { bay: BayId, #[serde(default)] message: String },
+    /// Start a session that hasn't had a message over in a worktree of its own (a new session in
+    /// its place, whose bay is returned), when other agents are changing files where it is.
+    StartInWorktree { bay: BayId },
     /// Put away the note on where a resumed session left off.
     HandoffDismiss { bay: BayId },
     Reply { bay: BayId, index: usize, reply: Reply },
@@ -352,6 +355,7 @@ impl Core {
             Action::Fork { bay, index, worktree: true } => self.fork_into_worktree(bay, index).map(|_| Value::Null),
             Action::WorktreeMerge { bay, message, close } => self.merge_worktree(bay, message, close).map(|_| Value::Null),
             Action::WorktreePublish { bay, message } => self.publish_worktree(bay, message).map(|_| Value::Null),
+            Action::StartInWorktree { bay } => self.restart_in_worktree(bay).map(|b| json!(b)),
             Action::HandoffDismiss { bay } => {
                 if let Some(v) = self.agent_mut(bay) {
                     v.handoff = None;

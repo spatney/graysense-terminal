@@ -2137,6 +2137,41 @@ button.file-chip:hover {
   margin-top: 6px;
 }
 
+.hero-overlap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 7%, var(--elev));
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+  animation: riseIn 0.25s var(--ease-out) both;
+}
+
+.hero-overlap > .codicon {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.hero-overlap > .grow {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.hero-overlap > .btn {
+  flex: none;
+  margin-left: auto;
+}
+
 .chat.fresh .composer-wrap {
   padding-bottom: 0;
 }

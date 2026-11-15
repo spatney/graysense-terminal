@@ -71,6 +71,15 @@ export interface AgentDto {
   premiumCost: number | null;
   /** The worktree of its own the session works in (or will, once its first message is sent). */
   worktree?: WorktreeDto | null;
+  /** Other agents are changing files where this empty session works. */
+  overlap?: OverlapDto | null;
+}
+
+export interface OverlapDto {
+  /** Who's changing files there ("“Fix login” is changing files in this repository too…"). */
+  text: string;
+  /** The session can start over in a worktree of its own instead. */
+  worktree: boolean;
 }
 
 export interface WorktreeDto {
@@ -775,6 +784,8 @@ export type Action =
   | { type: 'worktreeMerge'; bay: BayId; message?: string; close?: boolean }
   /** Push the session's worktree branch and open the page for a pull request. */
   | { type: 'worktreePublish'; bay: BayId; message?: string }
+  /** Start a session that hasn't had a message over in a worktree of its own; returns the new bay. */
+  | { type: 'startInWorktree'; bay: BayId }
   | { type: 'handoffDismiss'; bay: BayId }
   | { type: 'reply'; bay: BayId; index: number; reply: Reply }
   | { type: 'forgetMemories'; bay: BayId; index: number }
