@@ -207,9 +207,9 @@ Packages are made with [Velopack](https://velopack.io) and signed with Azure Art
 the service principal in these repository secrets (it needs the *Artifact Signing Certificate
 Profile Signer* role on the `rayfinfabricator` signing account): `AZURE_SIGNING_CLIENT_ID`,
 `AZURE_SIGNING_CLIENT_SECRET` and `AZURE_SIGNING_TENANT_ID`. The secret is a client secret of the
-`rayfin-fabricator-signing-ci` app registration, made for this repository; it expires on the date
-`az ad app credential list --id <client id>` shows for `graysense-terminal-ci`. To rotate it, add a
-new one (without replacing the others, which rayfin-fabricator uses) and set the secret again:
+`rayfin-fabricator-signing-ci` app registration, made for this repository; it expires on 2027-11-14
+(`az ad app credential list --id <client id>` shows it as `graysense-terminal-ci`). To rotate it, add
+a new one (without replacing the others, which rayfin-fabricator uses) and set the secret again:
 
 ```powershell
 az ad app credential reset --id <client id> --append --display-name graysense-terminal-ci --years 1
