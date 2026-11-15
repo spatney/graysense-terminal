@@ -208,12 +208,13 @@ pub struct Outbox {
     pub app_replies: Vec<Value>,
     pub title: Option<String>,
     pub attention: bool,
+    pub note: Option<crate::notify::Note>,
     pub quit: bool,
 }
 
 impl Outbox {
     fn is_empty(&self) -> bool {
-        self.update.is_none() && self.app_replies.is_empty() && self.title.is_none() && !self.attention && !self.quit
+        self.update.is_none() && self.app_replies.is_empty() && self.title.is_none() && !self.attention && self.note.is_none() && !self.quit
     }
 }
 
@@ -325,6 +326,8 @@ pub struct Core {
     quota_at: Option<Instant>,
     /// A turn ended since: ask again soon.
     quota_stale: bool,
+    /// Windows notifications waiting for the next flush.
+    os_notes: Vec<crate::notify::Note>,
 }
 
 /// How long nothing may change before a flush stops waiting to batch more changes.
@@ -391,6 +394,7 @@ impl Core {
             quota: None,
             quota_at: None,
             quota_stale: false,
+            os_notes: Vec::new(),
         };
         crate::memory::set_switches(core.settings.memory.enabled, core.settings.memory.inject);
         core.note_new_version();
@@ -1326,6 +1330,7 @@ impl Core {
                 let who = self.agent(bay).map(|v| v.display_title()).unwrap_or_default();
                 self.toast_with(lvl, format!("{who} · {title}: {message}"), Some(("Show".into(), json!({ "type": "focusBay", "bay": bay }))));
                 self.attention = true;
+                self.notify_os(bay, &title, Some(message), false);
             }
             Evt::Remembered { bay, id, text } => {
                 if let Some(v) = self.agent_mut(bay) {
@@ -1359,6 +1364,10 @@ impl Core {
 
     fn push_prompt(&mut self, bay: BayId, item: Item, what: &str) {
         let focused = self.focused == Some(bay) && self.window_focused.load(Ordering::Relaxed);
+        let question = match &item {
+            Item::Ask(p) => Some(crate::notify::gist(&p.question)),
+            _ => None,
+        };
         let Some(v) = self.agent_mut(bay) else { return };
         v.push(item);
         v.status = Status::Waiting(what.to_owned());
@@ -1367,6 +1376,21 @@ impl Core {
             self.toast_with(Level::Warn, format!("{title} needs {what}"), Some(("Show".into(), json!({ "type": "focusBay", "bay": bay }))));
         }
         self.attention = true;
+        self.notify_os(bay, &format!("Needs {what}"), question, true);
+    }
+
+    /// A Windows notification, while Graysense is in the background (and they're on). The
+    /// detail (what was said) is left out for incognito sessions.
+    fn notify_os(&mut self, bay: BayId, what: &str, detail: Option<String>, urgent: bool) {
+        if !self.settings.desktop_notifications || self.window_focused.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(v) = self.agent(bay) else { return };
+        let body = match detail.filter(|d| !d.is_empty() && !v.incognito) {
+            Some(d) => format!("{what}: {d}"),
+            None => what.to_owned(),
+        };
+        self.os_notes.push(crate::notify::Note { bay, title: v.display_title(), body, urgent });
     }
 
     fn apply_effects(&mut self, bay: BayId, effects: Vec<Effect>) {
@@ -1387,6 +1411,13 @@ impl Core {
                         self.toast_with(Level::Ok, format!("{title} finished"), Some(("Show".into(), json!({ "type": "focusBay", "bay": bay }))));
                         self.attention = true;
                     }
+                    let reply = self.agent(bay).and_then(|v| {
+                        v.items.iter().rev().take_while(|i| !matches!(i, Item::User { .. })).find_map(|i| match i {
+                            Item::Assistant { text, .. } => Some(crate::notify::gist(text)).filter(|g| !g.is_empty()),
+                            _ => None,
+                        })
+                    });
+                    self.notify_os(bay, "Finished", reply, false);
                 }
                 Effect::McpChanged => {
                     if self.settings.side_panel == Some(SidePanel::Mcp) && self.mcp_refresh_at.is_none() {
@@ -1708,7 +1739,13 @@ impl Core {
         }
         u.fills = std::mem::take(&mut self.fills_new);
 
-        let mut out = Outbox { app_replies: std::mem::take(&mut self.app_replies), attention: std::mem::take(&mut self.attention) && !self.window_focused.load(Ordering::Relaxed), quit: self.quit, ..Default::default() };
+        let mut out = Outbox {
+            app_replies: std::mem::take(&mut self.app_replies),
+            attention: std::mem::take(&mut self.attention) && !self.window_focused.load(Ordering::Relaxed),
+            note: crate::notify::combine(std::mem::take(&mut self.os_notes)),
+            quit: self.quit,
+            ..Default::default()
+        };
         let title = match self.focused.and_then(|id| self.bays.iter().find(|b| b.id == id)) {
             Some(b) => format!("{} — Graysense", b.title()),
             None => "Graysense".to_owned(),
@@ -1792,6 +1829,25 @@ fn deliver(app: &AppHandle, out: Outbox) {
         if out.attention {
             let _ = w.request_user_attention(Some(tauri::UserAttentionType::Informational));
         }
+    }
+    #[cfg(windows)]
+    if let Some(note) = out.note {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let bay = note.bay;
+            crate::notify::show(&note, move || {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                if let Some(state) = app.try_state::<crate::commands::CoreState>() {
+                    let mut c = state.0.lock();
+                    c.focus(bay);
+                    drop(c.send_out());
+                }
+            });
+        });
     }
     if out.quit {
         app.exit(0);

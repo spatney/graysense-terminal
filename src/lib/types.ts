@@ -612,6 +612,7 @@ export interface Settings {
   show_reasoning: boolean;
   cursor_blink: boolean;
   performance_hud: boolean;
+  desktop_notifications: boolean;
   zoom: number;
   default_model: string | null;
   default_effort: string | null;

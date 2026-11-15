@@ -6,6 +6,7 @@ mod commands;
 mod engine;
 mod memory;
 mod missions;
+mod notify;
 mod search;
 mod sessions;
 mod settings;
@@ -75,6 +76,8 @@ fn main() {
             }
         })
         .setup(move |app| {
+            #[cfg(windows)]
+            std::thread::spawn(notify::register);
             let courier = engine::Courier::start(app.handle().clone());
             let (core, rx) = engine::Core::new(runtime, startup, terminals, courier);
             let focused = core.window_focused.clone();

@@ -78,6 +78,8 @@ pub struct Settings {
     pub cursor_blink: bool,
     /// CPU and memory use in the status bar.
     pub perf_hud: bool,
+    /// Windows notifications when an agent finishes or needs the user while Graysense is in the background.
+    pub desktop_notifications: bool,
     /// Interface zoom (1 = 100%).
     pub zoom: f32,
     pub memory: MemorySettings,
@@ -150,6 +152,7 @@ impl Default for Settings {
             show_reasoning: true,
             cursor_blink: true,
             perf_hud: true,
+            desktop_notifications: true,
             zoom: 1.0,
             memory: MemorySettings::default(),
             sessions_root: None,
@@ -217,6 +220,7 @@ impl Settings {
         add("show_reasoning", json!(self.show_reasoning), json!("boolean"), "Show agents' reasoning in transcripts.");
         add("cursor_blink", json!(self.cursor_blink), json!("boolean"), "Blink the terminal cursor.");
         add("performance_hud", json!(self.perf_hud), json!("boolean"), "Show CPU and memory use in the status bar.");
+        add("desktop_notifications", json!(self.desktop_notifications), json!("boolean"), "Show a Windows notification when an agent finishes or needs the user while Graysense is in the background.");
         add("zoom", json!(self.zoom), json!("number from 0.7 to 1.6"), "Interface zoom (1 = 100%).");
         add("default_model", json!(self.default_model), model_choice.clone(), "Model new agents start with.");
         add("default_effort", json!(self.default_effort), json!({ "one_of": EFFORTS, "or": "null for each model's default" }), "How hard new agents think (reasoning effort). Models that don't offer the level use their default.");
@@ -303,6 +307,7 @@ impl Settings {
                 "cursor_blink" => next.cursor_blink = flag()?,
                 "zoom" => next.zoom = number(0.7, 1.6)?,
                 "performance_hud" => next.perf_hud = flag()?,
+                "desktop_notifications" => next.desktop_notifications = flag()?,
                 "default_model" => next.default_model = model()?,
                 "default_auto_approve" => next.default_auto_approve = flag()?,
                 "track_file_changes" => next.track_file_changes = flag()?,
@@ -370,7 +375,7 @@ pub const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "ma
 pub const CONTEXT_TIERS: [&str; 2] = ["default", "long_context"];
 
 /// Settings an agent may change without asking: appearance and layout only.
-pub const SAFE_KEYS: &[&str] = &["theme", "terminal_font_size", "layout", "side_panel", "side_panel_width", "show_reasoning", "cursor_blink", "performance_hud", "zoom"];
+pub const SAFE_KEYS: &[&str] = &["theme", "terminal_font_size", "layout", "side_panel", "side_panel_width", "show_reasoning", "cursor_blink", "performance_hud", "desktop_notifications", "zoom"];
 
 /// Preferences that make sense on any PC, which sync carries. Not what's about one PC (folders,
 /// shell, window, zoom, updates), and nothing that changes what agents may do without asking
@@ -381,6 +386,7 @@ pub const SYNCED_KEYS: &[&str] = &[
     "layout",
     "show_reasoning",
     "cursor_blink",
+    "desktop_notifications",
     "default_model",
     "default_effort",
     "default_context",

@@ -883,6 +883,13 @@ function buildSections({ settings, app, update, shells, memories, toReview }: Ct
           keywords: 'performance hud ram usage',
           toggle: { on: settings.performance_hud, onChange: (on) => void change({ performance_hud: on }) },
         },
+        {
+          id: 'notifications',
+          label: 'Desktop notifications',
+          desc: 'Show a Windows notification when an agent finishes or needs you while Graysense is in the background. Click it to go to the agent.',
+          keywords: 'notify alert toast windows background finished done approval question',
+          toggle: { on: settings.desktop_notifications, onChange: (on) => void change({ desktop_notifications: on }) },
+        },
       ],
     },
     {
