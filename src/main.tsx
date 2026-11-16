@@ -8,6 +8,7 @@ import './styles/chat.css';
 import { App } from './App';
 import { connect } from './lib/api';
 import { installDrafts } from './lib/drafts';
+import { primaryModifier } from './lib/platform';
 
 // Paint the last theme straight away, before the core's settings arrive.
 const saved = localStorage.getItem('gs-theme');
@@ -19,7 +20,7 @@ window.addEventListener('contextmenu', (e) => {
   if (!t.closest('input, textarea, .selectable, .xterm')) e.preventDefault();
 });
 window.addEventListener('keydown', (e) => {
-  if ((e.key === 'F5' || (e.ctrlKey && e.key.toLowerCase() === 'r')) && !import.meta.env.DEV) e.preventDefault();
+  if ((e.key === 'F5' || (primaryModifier(e) && e.key.toLowerCase() === 'r')) && !import.meta.env.DEV) e.preventDefault();
 });
 
 createRoot(document.getElementById('root')!).render(

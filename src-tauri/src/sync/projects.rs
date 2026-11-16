@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn a_project_follows_its_remote_between_pcs() {
         let root = std::env::temp_dir().join(format!("gs-proj-{}", memory::new_uid()));
-        let mine = clone_with_remote(&root, "work\\app", "https://github.com/me/app.git");
+        let mine = clone_with_remote(&root, "work/app", "https://github.com/me/app.git");
         let sessions = root.join("sessions");
         let p = Projects::new(&sessions, vec![mine.clone(), memory::project_key(&sessions)]);
 
@@ -193,7 +193,7 @@ mod tests {
 
         // In, on a PC that keeps the clone elsewhere: found by remote, not by path.
         let other_root = std::env::temp_dir().join(format!("gs-proj-{}", memory::new_uid()));
-        let theirs = clone_with_remote(&other_root, "dev\\app", "git@github.com:Me/App.git");
+        let theirs = clone_with_remote(&other_root, "dev/app", "git@github.com:Me/App.git");
         let there = Projects::new(&other_root.join("s"), vec![theirs.clone()]);
         assert_eq!(there.to_local(&out), Scope::Project(theirs));
         assert_eq!(there.to_local(&ItemScope::Sessions), Scope::Project(memory::project_key(&other_root.join("s"))));

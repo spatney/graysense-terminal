@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { act, changeFolder, completePath, newSession, newShell, pickFiles, pickFolder, savePastedImage } from '../../lib/api';
 import { contextLabel, effortLabel, human } from '../../lib/format';
 import { isImagePath } from '../../lib/images';
-import { activeMention, completionQuery, insertMention, mentionedFiles } from '../../lib/mentions';
+import { activeMention, completionQuery, insertMention, mentionedFiles, resolvePath } from '../../lib/mentions';
 import { fileIcon } from '../../lib/notes';
+import { shortcutLabel } from '../../lib/platform';
 import { setDraft, toast, useUi } from '../../lib/store';
 import type { BayDto, BayId, ContextSize, DirEntry, ModeId, ModelDto } from '../../lib/types';
 import { ImageThumb } from '../ImageThumb';
@@ -211,7 +212,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
           if (files.length) await act({ type: 'attach', bay: bay.id, paths: files });
         } else {
           const p = arg.replace(/^"|"$/g, '');
-          const full = /^[a-zA-Z]:[\\/]|^\\\\/.test(p) ? p : `${bay.cwd}\\${p}`;
+          const full = resolvePath(p, bay.cwd, home);
           await act({ type: 'attach', bay: bay.id, paths: [full] });
         }
         return true;
@@ -223,7 +224,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
           return true;
         }
         const p = arg.replace(/^"|"$/g, '');
-        const full = /^[a-zA-Z]:[\\/]|^\\\\/.test(p) ? p : /^[a-zA-Z]:$/.test(p) ? `${p}\\` : /^~([\\/]|$)/.test(p) && home ? `${home}${p.slice(1)}` : `${agent?.deferred ? defaultDir : bay.cwd}\\${p}`;
+        const full = resolvePath(p, agent?.deferred ? defaultDir : bay.cwd, home);
         await changeFolder(bay.id, full);
         return true;
       }
@@ -418,7 +419,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
   const canSend = text.trim().length > 0;
   // Mid-turn, a message steers the agent (it starts with the turn while the session boots).
   const steering = busy && agent?.status.kind !== 'booting';
-  const hint = placeholder ?? (bay ? (steering ? 'Steer Copilot, Ctrl+Enter to queue, Esc to stop' : busy ? 'Add to the queue, or press Esc to stop' : agent?.deferred ? 'What should we work on?' : 'Reply to Copilot') : 'Ask Copilot to build, fix or explain anything');
+  const hint = placeholder ?? (bay ? (steering ? shortcutLabel('Steer Copilot, Ctrl+Enter to queue, Esc to stop') : busy ? 'Add to the queue, or press Esc to stop' : agent?.deferred ? 'What should we work on?' : 'Reply to Copilot') : 'Ask Copilot to build, fix or explain anything');
 
   return (
     <div className="composer-wrap">
@@ -568,7 +569,7 @@ export function Composer({ bay, autoFocus, placeholder }: { bay: BayDto | null; 
               <Icon name="debug-stop" />
             </button>
           ) : (
-            <button type="button" className="send-btn" disabled={!canSend} data-tip={steering ? 'Steer Copilot (Ctrl+click to queue)' : busy ? 'Queue message' : 'Send'} data-keys="Enter" onClick={(e) => void submit(e.ctrlKey || e.metaKey)}>
+            <button type="button" className="send-btn" disabled={!canSend} data-tip={steering ? shortcutLabel('Steer Copilot (Ctrl+click to queue)') : busy ? 'Queue message' : 'Send'} data-keys="Enter" onClick={(e) => void submit(e.ctrlKey || e.metaKey)}>
               <Icon name="arrow-up" />
             </button>
           )}

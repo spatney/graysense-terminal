@@ -372,3 +372,49 @@ fn wait_for_exit(session: &Session, mut child: Box<dyn Child + Send + Sync>, all
     let _ = all_sent.recv_timeout(DRAIN_GRACE);
     session.end(code);
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_unix_login_shell_accepts_input_and_streams_output_through_the_terminal_service() {
+        let dir = std::env::temp_dir().join(format!("gs-pty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cwd = dir.canonicalize().unwrap();
+        let terminals = Terminals::default();
+        struct Cleanup(Terminals, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                self.0.kill_all();
+                let _ = std::fs::remove_dir(&self.1);
+            }
+        }
+        let _cleanup = Cleanup(terminals.clone(), dir);
+        let (tx, rx) = mpsc::channel();
+        let events = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                let _ = tx.send(serde_json::from_str::<serde_json::Value>(&json).unwrap());
+            }
+            Ok(())
+        });
+        let shell = shells::resolve(None, None).expect("a Unix login shell");
+        let info = terminals.spawn(Launch { id: "smoke".into(), cwd: cwd.clone(), shell, cols: 80, rows: 24 }, events).unwrap();
+        assert!(info.pid.is_some());
+        assert!(info.windows_build.is_none());
+        terminals.resize("smoke", 100, 30).unwrap();
+        terminals.write("smoke", "printf '\\n%s%s\\n' 'GS_MAC_' 'PTY_OK'; printf '%s\\n' \"$TERM\"; pwd\r").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut output = String::new();
+        loop {
+            let event = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).expect("shell output before timeout");
+            if event["kind"] == "output" {
+                output.push_str(event["data"].as_str().unwrap());
+            }
+            if output.contains("GS_MAC_PTY_OK") && output.contains("xterm-256color") && output.contains(&cwd.display().to_string()) {
+                break;
+            }
+            assert_ne!(event["kind"], "exit", "the login shell exited before the smoke command finished");
+        }
+    }
+}

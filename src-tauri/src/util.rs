@@ -7,37 +7,128 @@ use serde::Serialize;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// Open a file for viewing with its default app (folders open in File Explorer). Files that would
+/// Open a file for viewing with its default app (folders open in the native file manager). Files that would
 /// *run* when opened (scripts, programs) open in an editor instead: an agent may have written them.
-pub fn open_path(p: &Path) {
-    const RUNS: &[&str] = &["exe", "bat", "cmd", "com", "msi", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "scr", "lnk", "reg", "hta", "cpl", "pif", "appref-ms"];
-    let ext = p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
-    if !p.is_dir() && RUNS.contains(&ext.as_str()) {
-        if open_in_vscode(p).is_err() {
-            let _ = std::process::Command::new("notepad").arg(p).spawn();
-        }
-        return;
+pub fn open_path(p: &Path) -> Result<(), String> {
+    let p = std::path::absolute(p).map_err(|e| format!("Couldn't resolve {}: {e}", p.display()))?;
+    if needs_editor(&p)? {
+        return match open_in_vscode(&p) {
+            Ok(()) => Ok(()),
+            Err(editor_error) => {
+                let mut cmd = text_editor();
+                cmd.arg(&p);
+                run_opener(&mut cmd).map_err(|e| format!("{editor_error} {e}"))
+            }
+        };
     }
-    let _ = std::process::Command::new("explorer").arg(p).spawn();
+    let mut cmd = system_opener();
+    cmd.arg(&p);
+    run_opener(&mut cmd)
 }
 
-/// Show a file selected in File Explorer (a folder opens).
-pub fn reveal_path(p: &Path) {
+fn needs_editor(p: &Path) -> Result<bool, String> {
+    const RUNS: &[&str] = &["exe", "bat", "cmd", "com", "msi", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "scr", "lnk", "reg", "hta", "cpl", "pif", "appref-ms",
+        "app", "pkg", "mpkg", "command", "sh", "bash", "zsh", "fish", "py", "rb", "pl", "jar", "scpt", "scptd", "applescript", "workflow", "action", "webloc", "url", "desktop"];
+    let meta = std::fs::metadata(p).map_err(|e| format!("Couldn't open {}: {e}", p.display()))?;
+    let target = std::fs::canonicalize(p).map_err(|e| format!("Couldn't resolve {}: {e}", p.display()))?;
+    if [p, target.as_path()].into_iter().any(|path| {
+        let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+        RUNS.contains(&ext.as_str()) && (!meta.is_dir() || ["app", "pkg", "mpkg", "scptd", "workflow", "action"].contains(&ext.as_str()))
+    }) {
+        return Ok(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
+            return Ok(true);
+        }
+    }
+    let _ = meta;
+    Ok(false)
+}
+
+fn system_opener() -> std::process::Command {
+    #[cfg(windows)]
+    let cmd = std::process::Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let cmd = std::process::Command::new("/usr/bin/open");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let cmd = std::process::Command::new("xdg-open");
+    cmd
+}
+
+fn text_editor() -> std::process::Command {
+    #[cfg(windows)]
+    let cmd = std::process::Command::new("notepad");
+    #[cfg(target_os = "macos")]
+    let cmd = {
+        let mut cmd = system_opener();
+        cmd.arg("-t");
+        cmd
+    };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let cmd = std::process::Command::new("gedit");
+    cmd
+}
+
+fn run_opener(cmd: &mut std::process::Command) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        if p.is_dir() {
-            let _ = std::process::Command::new("explorer").arg(p).spawn();
-        } else {
-            let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", p.display())).spawn();
-        }
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn().map(|_| ()).map_err(|e| format!("Couldn't open with {}: {e}", cmd.get_program().to_string_lossy()))
     }
     #[cfg(not(windows))]
-    let _ = p;
+    {
+        let output = cmd.output().map_err(|e| format!("Couldn't open with {}: {e}", cmd.get_program().to_string_lossy()))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!("Couldn't open with {} ({}): {}", cmd.get_program().to_string_lossy(), output.status, String::from_utf8_lossy(&output.stderr).trim()))
+        }
+    }
+}
+
+/// Show a file selected in Finder or File Explorer (a normal folder opens).
+pub fn reveal_path(p: &Path) -> Result<(), String> {
+    run_opener(&mut reveal_command(p)?)
+}
+
+fn reveal_command(p: &Path) -> Result<std::process::Command, String> {
+    let p = std::path::absolute(p).map_err(|e| format!("Couldn't resolve {}: {e}", p.display()))?;
+    let meta = std::fs::metadata(&p).map_err(|e| format!("Couldn't reveal {}: {e}", p.display()))?;
+    let mut cmd = system_opener();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if meta.is_dir() {
+            cmd.arg(&p);
+        } else {
+            cmd.raw_arg(format!("/select,\"{}\"", p.display()));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Always reveal bundles; opening an .app folder would launch it.
+        if !meta.is_dir() || needs_editor(&p)? {
+            cmd.arg("-R");
+        }
+        cmd.arg(&p);
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    cmd.arg(if meta.is_dir() { p.as_path() } else { p.parent().ok_or("That file has no parent folder.")? });
+    Ok(cmd)
 }
 
 /// Open a file or folder in VS Code (a per-user or machine-wide install, or `code` on PATH).
 pub fn open_in_vscode(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let installs = [
+        Some(PathBuf::from("/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")),
+        dirs::home_dir().map(|h| h.join("Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")),
+    ];
+    #[cfg(not(target_os = "macos"))]
     let installs = [
         dirs::data_local_dir().map(|d| d.join("Programs").join("Microsoft VS Code").join("Code.exe")),
         std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Microsoft VS Code").join("Code.exe")),
@@ -45,13 +136,14 @@ pub fn open_in_vscode(path: &Path) -> Result<(), String> {
     let exe = installs.into_iter().flatten().find(|p| p.is_file()).or_else(|| which::which("code").ok());
     let Some(exe) = exe else { return Err("VS Code isn't installed, or `code` isn't on PATH.".into()) };
     let mut cmd = std::process::Command::new(exe);
-    cmd.arg(path);
+    let path = std::path::absolute(path).map_err(|e| format!("Couldn't resolve {}: {e}", path.display()))?;
+    cmd.arg("--").arg(path);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.spawn().map(|_| ()).map_err(|e| format!("Couldn't start VS Code: {e}"))
+    run_opener(&mut cmd)
 }
 
 #[derive(Serialize)]
@@ -217,6 +309,62 @@ fn prune_pasted_images(dir: &Path, keep: std::time::Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_files_report_errors_instead_of_launching_an_opener() {
+        let missing = std::env::temp_dir().join(format!("gs-missing-{}", uuid::Uuid::new_v4()));
+        assert!(open_path(&missing).unwrap_err().contains("Couldn't open"));
+        assert!(reveal_path(&missing).unwrap_err().contains("Couldn't reveal"));
+        assert!(run_opener(&mut std::process::Command::new("graysense-no-such-opener")).is_err());
+    }
+
+    #[test]
+    fn scripts_installers_and_app_bundles_are_never_opened_as_programs() {
+        let dir = std::env::temp_dir().join(format!("gs-safe-open-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("Example.app")).unwrap();
+        for name in ["script.command", "script.SH", "script.py", "installer.pkg", "script.scpt", "script.exe"] {
+            let path = dir.join(name);
+            std::fs::write(&path, "do not execute").unwrap();
+            assert!(needs_editor(&path).unwrap(), "{name}");
+        }
+        assert!(needs_editor(&dir.join("Example.app")).unwrap());
+        assert!(!needs_editor(&dir).unwrap());
+        let text = dir.join("readme.txt");
+        std::fs::write(&text, "text").unwrap();
+        assert!(!needs_editor(&text).unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let executable = dir.join("no-extension");
+            std::fs::write(&executable, "#!/bin/sh\nexit 1").unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(needs_editor(&executable).unwrap());
+            let link = dir.join("looks-like-text.txt");
+            std::os::unix::fs::symlink(&executable, &link).unwrap();
+            assert!(needs_editor(&link).unwrap());
+            let bundle_link = dir.join("looks-like-folder");
+            std::os::unix::fs::symlink(dir.join("Example.app"), &bundle_link).unwrap();
+            assert!(needs_editor(&bundle_link).unwrap());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_reveals_files_and_bundles_but_opens_regular_folders() {
+        let dir = std::env::temp_dir().join(format!("gs-finder-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("Example.app")).unwrap();
+        let file = dir.join("a file.txt");
+        std::fs::write(&file, "text").unwrap();
+        for path in [&file, &dir.join("Example.app")] {
+            let cmd = reveal_command(path).unwrap();
+            assert_eq!(cmd.get_program(), "/usr/bin/open");
+            assert_eq!(cmd.get_args().collect::<Vec<_>>(), [std::ffi::OsStr::new("-R"), path.as_os_str()]);
+        }
+        assert_eq!(reveal_command(&dir).unwrap().get_args().collect::<Vec<_>>(), [dir.as_os_str()]);
+        assert_eq!(text_editor().get_args().collect::<Vec<_>>(), [std::ffi::OsStr::new("-t")]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn path_completion_filters_before_limiting_and_includes_hidden_files() {

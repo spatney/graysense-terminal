@@ -3,6 +3,7 @@ import { captureIdea, toggleSidePanel, zoomBy } from '../components/Overlays';
 import { act, captureNote, closeBay, newSession, newShell, setSide, toggleSide } from './api';
 import { focusComposer, openOverlay, useUi } from './store';
 import type { LayoutId } from './types';
+import { bayNumber, isMac, primaryModifier } from './platform';
 
 const LAYOUTS: LayoutId[] = ['grid', 'focus', 'columns', 'rows'];
 
@@ -22,18 +23,19 @@ export function useShortcuts() {
       const target = e.target as HTMLElement | null;
       const inTerminal = !!target?.closest?.('.xterm');
       const k = e.key.toLowerCase();
-      const ctrl = e.ctrlKey && !e.metaKey;
+      const ctrl = primaryModifier(e);
+      const number = bayNumber(e);
       const focusedIndex = s.bays.findIndex((b) => b.id === s.app?.focused);
       const focused = s.bays[focusedIndex];
       let handled = true;
-      if (ctrl && !e.shiftKey && !e.altKey && k === 'k' && !inTerminal) openOverlay({ kind: 'search' });
+      if (ctrl && !e.shiftKey && !e.altKey && k === 'k' && (!inTerminal || isMac)) openOverlay({ kind: 'search' });
       else if (ctrl && !e.shiftKey && !e.altKey && k === 'f' && !inTerminal && focused?.kind === 'agent' && s.transcripts[focused.id]?.length && !target?.closest?.('.side'))
         window.dispatchEvent(new CustomEvent('gs-chat-find', { detail: focused.id }));
       else if (ctrl && e.shiftKey && k === 'p') openOverlay({ kind: 'palette' });
       else if (ctrl && !e.shiftKey && (k === '/' || e.code === 'Slash')) openOverlay({ kind: 'shortcuts' });
       else if (ctrl && !e.shiftKey && k === ',') void setSide('settings');
       else if (ctrl && e.shiftKey && k === 'b') toggleSidePanel();
-      else if (ctrl && e.shiftKey && k === 'h') void toggleSide('sessions');
+      else if (ctrl && e.shiftKey && k === (isMac ? 'y' : 'h')) void toggleSide('sessions');
       else if (ctrl && e.shiftKey && k === 'm') void toggleSide('memory');
       else if (ctrl && e.shiftKey && k === 'i') captureIdea();
       else if (ctrl && e.shiftKey && k === 's') captureNote();
@@ -44,8 +46,8 @@ export function useShortcuts() {
       else if (ctrl && e.shiftKey && k === 'l') {
         const now = s.settings?.layout ?? 'grid';
         void act({ type: 'setSettings', changes: { layout: LAYOUTS[(LAYOUTS.indexOf(now) + 1) % LAYOUTS.length] } });
-      } else if (ctrl && k === 'tab' && s.bays.length > 1) focusBayAt((focusedIndex + (e.shiftKey ? -1 : 1) + s.bays.length) % s.bays.length);
-      else if (ctrl && e.altKey && /^[1-9]$/.test(e.key)) focusBayAt(Number(e.key) - 1);
+      } else if (e.ctrlKey && !e.metaKey && k === 'tab' && s.bays.length > 1) focusBayAt((focusedIndex + (e.shiftKey ? -1 : 1) + s.bays.length) % s.bays.length);
+      else if (ctrl && e.altKey && number != null) focusBayAt(number - 1);
       else if (ctrl && !e.altKey && (k === '=' || k === '+')) {
         if (inTerminal && s.settings) void act({ type: 'setSettings', changes: { terminal_font_size: Math.min(28, s.settings.terminal_font_size + 1) } });
         else zoomBy(0.1);

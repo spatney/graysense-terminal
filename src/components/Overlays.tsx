@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { act, captureNote, changeFolder, closeBay, newAgentIn, newAgentInWorktreeOf, newSession, newShell, newShellIn, restartToUpdate, revealMemory, search, setSide, toggleSide } from '../lib/api';
 import { rankNotes } from '../lib/notes';
+import { fileManager, isMac, primaryModifier } from '../lib/platform';
 import { NoteCapture } from './NoteCapture';
 import { ago, baseName, contextLabel, effortLabel, plural, shortPath } from '../lib/format';
 import { useImageUrl } from '../lib/images';
@@ -53,7 +54,7 @@ function ImageOverlay({ path, onClose }: { path: string; onClose: () => void }) 
         <button type="button" className="icon-btn" data-tip="Open" onClick={() => void act({ type: 'openPath', path })}>
           <Icon name="link-external" />
         </button>
-        <button type="button" className="icon-btn" data-tip="Reveal in File Explorer" onClick={() => void act({ type: 'revealPath', path })}>
+        <button type="button" className="icon-btn" data-tip={`Reveal in ${fileManager}`} onClick={() => void act({ type: 'revealPath', path })}>
           <Icon name="folder-opened" />
         </button>
         <button type="button" className="icon-btn" data-tip="Copy path" onClick={() => void copyText(path, 'Path copied')}>
@@ -151,7 +152,7 @@ function SearchOverlay({ initial, onClose }: { initial: string; onClose: () => v
     };
   }, [query, status?.sessions, status?.files]);
 
-  const open = async (h: SearchHit, e?: { ctrlKey?: boolean; shiftKey?: boolean }) => {
+  const open = async (h: SearchHit, e?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     onClose();
     if (h.kind === 'session' && h.sessionId) {
       const bay = await act<number>({ type: 'resumeSession', id: h.sessionId });
@@ -161,15 +162,15 @@ function SearchOverlay({ initial, onClose }: { initial: string; onClose: () => v
         await act({ type: 'attach', bay: focusedAgent, paths: [h.path] });
         focusComposer(focusedAgent);
         toast('ok', `Attached ${baseName(h.path)}`);
-      } else if (e?.ctrlKey) void act({ type: 'revealPath', path: h.path });
+      } else if (e && primaryModifier(e)) void act({ type: 'revealPath', path: h.path });
       else void act({ type: 'openPath', path: h.path });
     }
   };
   const memories = useUi((s) => s.memory.memories);
   const notes = useMemo(() => (query.trim() ? rankNotes(memories.filter((m) => m.kind === 'note' && m.state === 'active'), query).slice(0, 4) : []), [memories, query]);
-  const openNote = (id: number, e?: { ctrlKey?: boolean }) => {
+  const openNote = (id: number, e?: { ctrlKey?: boolean; metaKey?: boolean }) => {
     onClose();
-    if (e?.ctrlKey) void act<number>({ type: 'noteAsk', question: query.trim(), ids: [id] }).then((b) => b != null && focusComposer(b));
+    if (e && primaryModifier(e)) void act<number>({ type: 'noteAsk', question: query.trim(), ids: [id] }).then((b) => b != null && focusComposer(b));
     else revealMemory(id);
   };
   const total = notes.length + hits.length;
@@ -320,7 +321,7 @@ function useCommands(): Command[] {
     cmds.push(
       { id: 'close', label: `Close “${focused.title}”`, icon: 'close', group: 'Bay', keys: ['Ctrl', 'Shift', 'W'], run: () => void closeBay(focused.id) },
       { id: 'max', label: 'Maximize bay', icon: 'screen-full', group: 'Bay', keys: ['Ctrl', 'Shift', '↵'], run: () => void act({ type: 'maximizeBay', bay: focused.id }) },
-      { id: 'reveal', label: 'Reveal folder in File Explorer', icon: 'folder-opened', group: 'Bay', run: () => void act({ type: 'revealPath', path: focused.cwd }) },
+      { id: 'reveal', label: `Reveal folder in ${fileManager}`, icon: 'folder-opened', group: 'Bay', run: () => void act({ type: 'revealPath', path: focused.cwd }) },
       { id: 'vscode', label: 'Open folder in VS Code', icon: 'vscode', group: 'Bay', run: () => void act({ type: 'openInVsCode', path: focused.cwd }) },
     );
     if (focused.agent) {
@@ -475,7 +476,8 @@ const SHEET: [string, [string[], string][]][] = [
   [
     'Terminal',
     [
-      [['Ctrl', 'C'], 'Copy selection (or interrupt)'],
+      [[isMac ? 'Cmd' : 'Ctrl', 'C'], isMac ? 'Copy selection' : 'Copy selection (or interrupt)'],
+      ...(isMac ? [[['Control', 'C'], 'Interrupt the shell'] as [string[], string]] : []),
       [['Ctrl', 'V'], 'Paste'],
       [['Ctrl', 'F'], 'Find'],
       [['Ctrl', '=', '/', '-'], 'Font size'],

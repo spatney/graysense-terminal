@@ -160,6 +160,26 @@ describe('composer /cd', () => {
   });
 });
 
+describe('composer Unix slash-command paths', () => {
+  it.each([
+    ['/attach "/tmp/My file.txt"', '/tmp/My file.txt', 'attach'],
+    ['/attach ../file.txt', '/Users/test/project/../file.txt', 'attach'],
+    ['/cd "/tmp/My folder"', '/tmp/My folder', 'cd'],
+    ['/cd ../web', '/Users/test/project/../web', 'cd'],
+  ])('resolves %s without Windows separators', async (command, path, action) => {
+    render(<Composer bay={{ ...bay, cwd: '/Users/test/project' }} />);
+    fireEvent.keyDown(type(command), { key: 'Enter' });
+    if (action === 'attach') {
+      await waitFor(() => expect(act).toHaveBeenCalledWith({ type: 'attach', bay: 1, paths: [path] }));
+      expect(changeFolder).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(changeFolder).toHaveBeenCalledWith(1, path));
+      expect(act).not.toHaveBeenCalled();
+    }
+    expect(useUi.getState().drafts[1]).toBe('');
+  });
+});
+
 describe('composer image paste', () => {
   const shot = 'C:\\data\\pasted-images\\pasted-image-1.png';
   const image = (type = 'image/png') => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'image.png', { type });

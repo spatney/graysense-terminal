@@ -427,18 +427,14 @@ impl Core {
                 self.toast(Level::Info, "Reading this conversation for things to remember…");
                 ok
             }
-            Action::OpenPath { path } => {
-                open_path(std::path::Path::new(&path));
-                ok
-            }
+            Action::OpenPath { path } => open_path(std::path::Path::new(&path)).map(|_| Value::Null),
             Action::RevealPath { path } => {
                 let p = PathBuf::from(&path);
                 // The sessions folder is made with the first session; showing it makes it too.
                 if !p.exists() && p == self.settings.sessions_root() {
-                    let _ = std::fs::create_dir_all(&p);
+                    std::fs::create_dir_all(&p).map_err(|e| format!("Couldn't create {}: {e}", p.display()))?;
                 }
-                reveal_path(&p);
-                ok
+                reveal_path(&p).map(|_| Value::Null)
             }
             Action::OpenInVsCode { path } => open_in_vscode(std::path::Path::new(&path)).map(|_| Value::Null),
             Action::ResumeSession { id } => Ok(json!(self.resume_session(id))),
@@ -662,15 +658,13 @@ impl Core {
                     return Ok(json!({ "url": a.target }));
                 }
                 let path = a.open_path().ok_or_else(|| format!("{} isn't there anymore.", a.target))?;
-                open_path(&path);
-                ok
+                open_path(&path).map(|_| Value::Null)
             }
             Action::NoteReveal { id, index } => {
                 let a = self.note_attachment(id, index).unwrap_or_else(|| unreachable!());
                 let path = a.open_path().ok_or_else(|| format!("{} isn't there anymore.", a.target))?;
                 self.memory.lock().note_opened(id);
-                reveal_path(&path);
-                ok
+                reveal_path(&path).map(|_| Value::Null)
             }
             Action::NoteTouched { id } => {
                 self.memory.lock().note_opened(id);

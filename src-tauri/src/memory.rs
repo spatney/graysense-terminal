@@ -438,7 +438,14 @@ impl Project {
 }
 
 pub fn project_key(path: &Path) -> String {
-    path.display().to_string().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+    #[cfg(windows)]
+    return path.display().to_string().replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    #[cfg(not(windows))]
+    {
+        let path = path.to_string_lossy();
+        let key = path.trim_end_matches('/');
+        if key.is_empty() && path.starts_with('/') { "/".into() } else { key.to_owned() }
+    }
 }
 
 // ------------------------------------------------------------------ text helpers
@@ -1806,6 +1813,14 @@ pub fn parse_curator(content: &str, project: Option<&Project>) -> Vec<Op> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn project_keys_preserve_unix_paths_and_case() {
+        assert_eq!(project_key(Path::new("/Users/Developer/MyApp/")), "/Users/Developer/MyApp");
+        assert_eq!(project_key(Path::new("/")), "/");
+        assert_ne!(project_key(Path::new("/work/App")), project_key(Path::new("/work/app")));
+    }
 
     fn store() -> MemoryStore {
         MemoryStore { memories: Vec::new(), approvals: Vec::new(), next_id: 1, path: std::env::temp_dir().join("gs-mem-test.json"), dirty: false, revision: 0, last_tidy: None }

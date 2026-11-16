@@ -7,10 +7,12 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
 import { act, newShell, openLink } from '../../lib/api';
-import { useUi } from '../../lib/store';
+import { toast, useUi } from '../../lib/store';
 import { terminalTheme } from '../../lib/theme';
+import { primaryModifier } from '../../lib/platform';
 import type { BayDto, TerminalEvent, TerminalInfo, TerminalShell } from '../../lib/types';
 import { Icon, type MenuItem, showMenu } from '../ui';
+import { terminalKeyAction } from './keys';
 
 const HIGH_WATER = 256 * 1024;
 const LOW_WATER = 32 * 1024;
@@ -60,7 +62,7 @@ class Session {
     this.term.loadAddon(this.search);
     this.term.loadAddon(new Unicode11Addon());
     this.term.unicode.activeVersion = '11';
-    this.term.loadAddon(new WebLinksAddon((e, uri) => (e.ctrlKey ? openLink(uri) : undefined)));
+    this.term.loadAddon(new WebLinksAddon((e, uri) => (primaryModifier(e) ? openLink(uri) : undefined)));
     this.term.open(host);
     try {
       this.webgl = new WebglAddon();
@@ -161,41 +163,48 @@ class Session {
     }
   }
 
-  copy() {
+  async copy() {
     const text = this.term.getSelection();
-    if (text) void navigator.clipboard.writeText(text).catch(() => {});
-    this.term.clearSelection();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      if (!this.disposed) this.term.clearSelection();
+    } catch {
+      toast('error', "Couldn't copy to the clipboard");
+    }
   }
 
-  paste() {
-    void navigator.clipboard
-      .readText()
-      .then((t) => t && this.term.paste(t))
-      .catch(() => {});
+  async paste() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && !this.disposed) this.term.paste(text);
+    } catch {
+      toast('error', "Couldn't paste from the clipboard");
+    }
   }
 
   private key(e: KeyboardEvent): boolean {
-    if (e.type !== 'keydown') return true;
-    const k = e.key.toLowerCase();
-    if (e.ctrlKey && !e.metaKey) {
-      if (!e.altKey && k === 'c' && (e.shiftKey || this.term.hasSelection())) {
+    switch (terminalKeyAction(e, this.term.hasSelection())) {
+      case 'copy':
         e.preventDefault();
-        this.copy();
+        void this.copy();
         return false;
-      }
-      // The browser pastes and xterm.js types it from the paste event.
-      if (!e.altKey && k === 'v') return false;
-      if (!e.altKey && !e.shiftKey && k === 'f') {
+      case 'paste':
+        // The native paste event carries clipboard text to xterm.js.
+        return false;
+      case 'find':
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('gs-term-find', { detail: this.bay }));
         return false;
-      }
-      // App shortcuts reach the app.
-      if (!e.altKey && e.shiftKey && /^[a-z]$/.test(k)) return false;
-      if (!e.altKey && ['tab', '=', '+', '-', '0', ',', '/'].includes(k)) return false;
-      if (e.altKey && /^[1-9]$/.test(e.key)) return false;
+      case 'selectAll':
+        e.preventDefault();
+        this.term.selectAll();
+        return false;
+      case 'app':
+        return false;
+      default:
+        return true;
     }
-    return true;
   }
 
   dispose() {

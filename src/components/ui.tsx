@@ -2,6 +2,7 @@ import { Component, type ReactNode, useEffect, useLayoutEffect, useRef, useState
 import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 import { toast } from '../lib/store';
+import { shortcutLabel } from '../lib/platform';
 
 export function Icon({ name, className = '', style }: { name: string; className?: string; style?: React.CSSProperties }) {
   return <i className={`codicon codicon-${name} ${className}`} style={style} aria-hidden />;
@@ -10,7 +11,7 @@ export function Icon({ name, className = '', style }: { name: string; className?
 export function Kbd({ keys }: { keys: string[] }) {
   return (
     <span className="kbd">
-      {keys.map((k) => (
+      {shortcutLabel(keys.join('+')).split('+').map((k) => (
         <kbd key={k}>{k}</kbd>
       ))}
     </span>
@@ -162,7 +163,7 @@ function MenuRows({ items, hot, open, onHover, onPick }: { items: MenuItem[]; ho
             <Icon name={it.checked ? 'check' : (it.icon ?? 'blank')} />
             <span className="ellipsis">{it.label}</span>
             {it.detail && <span className="menu-detail">{it.detail}</span>}
-            {it.hint && <span className="hint">{it.hint}</span>}
+            {it.hint && <span className="hint">{shortcutLabel(it.hint)}</span>}
           </button>
         );
       })}

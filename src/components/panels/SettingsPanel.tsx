@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { type CSSProperties, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { act, openLink, pickFolder, restartToUpdate, setSide } from '../../lib/api';
 import { agoLong, effortLabel, modelLabel, plural } from '../../lib/format';
+import { fileManager } from '../../lib/platform';
 import { openOverlay, toast, useUi } from '../../lib/store';
 import { THEMES } from '../../lib/theme';
 import type { AppDto, MemoryDto, ModelDto, Settings, TerminalShell, ThemeId, UpdateStatus } from '../../lib/types';
@@ -581,7 +582,7 @@ function PathField({ path, home, onOpen }: { path: string; home: string; onOpen?
           <Icon name="go-to-file" />
         </button>
       )}
-      <button type="button" className="icon-btn sm" data-tip="Show in File Explorer" aria-label="Show in File Explorer" onClick={() => void act({ type: 'revealPath', path })}>
+      <button type="button" className="icon-btn sm" data-tip={`Show in ${fileManager}`} aria-label={`Show in ${fileManager}`} onClick={() => void act({ type: 'revealPath', path })}>
         <Icon name="folder-opened" />
       </button>
     </div>

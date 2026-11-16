@@ -1528,9 +1528,10 @@ mod tests {
         assert_eq!(files, [(r"C:\app\a.ts", "edit"), (r"C:\app\b.ts", "create"), (r"C:\app\c.md", "delete")]);
         assert_eq!(card.lines, Some((120, 19)));
         // The session's changed files: those the patch wrote (not the one it deleted), each once
-        // however a tool writes its path.
+        // however a tool writes its path on Windows.
         assert_eq!(v.files, [r"C:\app\a.ts", r"C:\app\b.ts"]);
-        v.apply(&ev("3", "tool.execution_start", json!({ "toolCallId": "t2", "toolName": "edit", "arguments": { "path": "C:/App/A.ts" } })));
+        let duplicate = if cfg!(windows) { "C:/App/A.ts" } else { r"C:\app\a.ts" };
+        v.apply(&ev("3", "tool.execution_start", json!({ "toolCallId": "t2", "toolName": "edit", "arguments": { "path": duplicate } })));
         assert_eq!(v.files, [r"C:\app\a.ts", r"C:\app\b.ts"]);
     }
 
