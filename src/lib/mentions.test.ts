@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeMention, completionQuery, insertMention, mentionedFiles } from './mentions';
+import { activeMention, completionQuery, insertMention, mentionedFiles, resolvePath } from './mentions';
 
 describe('file mentions', () => {
   it('finds the token at the caret without treating emails or selections as mentions', () => {
@@ -30,6 +30,15 @@ describe('file mentions', () => {
     expect(next.text).toBe('Read @"C:\\repo\\My File.ts"  then explain');
     expect(next.text.slice(0, next.caret)).toBe('Read @"C:\\repo\\My File.ts" ');
     expect(mentionedFiles(next.text)).toEqual(['C:\\repo\\My File.ts']);
+  });
+
+  it('resolves home and root paths while keeping home completion inside its directory', () => {
+    expect(resolvePath('~', '/repo', '/Users/me')).toBe('/Users/me');
+    expect(resolvePath('~/My Files/a.txt', '/repo', '/Users/me')).toBe('/Users/me/My Files/a.txt');
+    expect(resolvePath('a.txt', '/', '/Users/me')).toBe('/a.txt');
+    expect(resolvePath('~\\code', 'C:\\repo', 'C:\\Users\\Me')).toBe('C:\\Users\\Me\\code');
+    expect(completionQuery('~', '/repo', '/Users/me')).toEqual({ directory: '/Users/me/', prefix: '' });
+    expect(completionQuery('~', 'C:\\repo', 'C:\\Users\\Me')).toEqual({ directory: 'C:\\Users\\Me\\', prefix: '' });
   });
 
   it('continues completing inside a selected folder with spaces', () => {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { act, pickFiles } from '../../lib/api';
 import { agoLong, ago, bytes, plural } from '../../lib/format';
 import { fileIcon, looksLikeQuestion, matchRanges, rankNotes, relevanceLevel } from '../../lib/notes';
+import { fileManager, shortcutLabel } from '../../lib/platform';
 import { focusComposer, openOverlay, toast, useUi } from '../../lib/store';
 import type { MemoryDto, NoteAttachmentDto } from '../../lib/types';
 import { NoteCapture } from '../NoteCapture';
@@ -67,7 +68,7 @@ function AttachmentChip({ note, a, index }: { note: MemoryDto; a: NoteAttachment
     const items: MenuItem[] = [{ label: a.kind === 'link' ? 'Open link' : 'Open', icon: a.kind === 'link' ? 'link-external' : 'go-to-file', onSelect: () => void openAttachment(note, index) }];
     if (a.kind !== 'link') {
       items.push(
-        { label: 'Reveal in File Explorer', icon: 'folder-opened', disabled: !a.exists, onSelect: () => void act({ type: 'noteReveal', id: note.id, index }) },
+        { label: `Reveal in ${fileManager}`, icon: 'folder-opened', disabled: !a.exists, onSelect: () => void act({ type: 'noteReveal', id: note.id, index }) },
         { label: 'Attach to an agent', icon: 'attach', disabled: !a.exists, onSelect: () => attachTo(path) },
         { label: 'Copy path', icon: 'copy', onSelect: () => void copyText(path, 'Path copied') },
       );
@@ -173,7 +174,7 @@ function NoteCard({ note, query, flash, ask }: { note: MemoryDto; query: string;
             />
             <div className="row">
               <span className="faint grow" style={{ fontSize: 11.5 }}>
-                Ctrl+Enter to save
+                {shortcutLabel('Ctrl+Enter to save')}
               </span>
               <button type="button" className="btn ghost sm" onClick={() => setEditing(null)}>
                 Cancel
@@ -306,7 +307,7 @@ export function NotesView() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || question)) {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey || question)) {
                 e.preventDefault();
                 askFromSearch();
               }
@@ -332,7 +333,7 @@ export function NotesView() {
                 <span className="ellipsis">“{query.trim()}”</span>
                 <span className="faint">{top.length ? `Answers from ${plural(top.length, 'matching note')}${filesInTop ? ` and ${plural(filesInTop, 'file')}` : ''}` : 'No notes match yet; Copilot can still help'}</span>
               </span>
-              <span className="nts-ask-key">{question ? '↵' : 'Ctrl ↵'}</span>
+              <span className="nts-ask-key">{question ? '↵' : shortcutLabel('Ctrl ↵')}</span>
             </button>
             <div className="panel-section">
               <span className="section-label">{hits.length ? plural(hits.length, 'match', 'matches') : 'No matches'}</span>

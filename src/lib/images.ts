@@ -17,7 +17,7 @@ const mimeOf = (path: string) => MIME.get(/\.([a-z0-9]+)$/i.exec(path)?.[1].toLo
 
 /** A full path to an image Graysense can preview (by its extension). */
 export function isImagePath(path: string): boolean {
-  return !!mimeOf(path) && /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(path);
+  return !!mimeOf(path) && /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(path);
 }
 
 /**

@@ -629,6 +629,7 @@ pub fn short_path(path: &Path) -> String {
     shorten_home(path, dirs::home_dir().as_deref())
 }
 
+#[cfg(windows)]
 fn shorten_home(path: &Path, home: Option<&Path>) -> String {
     let path = path.to_string_lossy().replace('/', "\\");
     if let Some(home) = home {
@@ -645,6 +646,16 @@ fn shorten_home(path: &Path, home: Option<&Path>) -> String {
         }
     }
     path
+}
+
+#[cfg(not(windows))]
+fn shorten_home(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        return if rest.as_os_str().is_empty() { "~".into() } else { format!("~/{}", rest.display()) };
+    }
+    path.display().to_string()
 }
 
 pub fn dir_name(path: &Path) -> String {
@@ -697,12 +708,17 @@ mod tests {
     #[test]
     fn projects_not_to_learn_in_are_stored_as_memory_keys() {
         let mut settings = Settings::default();
-        assert!(settings.memory.learns_in(r"c:\code\app"));
-        let changes = json!({ "memory.no_learn_projects": [r"C:\Code\App\", "c:/code/app", r"D:\client"] });
+        let (folders, keys) = if cfg!(windows) {
+            ([r"C:\Code\App\", "c:/code/app", r"D:\client"], [r"c:\code\app", r"d:\client"])
+        } else {
+            (["/Users/Developer/App/", "/Users/Developer/App", "/work/client"], ["/Users/Developer/App", "/work/client"])
+        };
+        assert!(settings.memory.learns_in(keys[0]));
+        let changes = json!({ "memory.no_learn_projects": folders });
         settings.apply_patch(changes.as_object().unwrap(), &[]).unwrap();
-        assert_eq!(settings.memory.no_learn, [r"c:\code\app", r"d:\client"]);
-        assert!(!settings.memory.learns_in(r"c:\code\app") && settings.memory.learns_in(r"c:\code\other"));
-        assert_eq!(settings.values()["memory.no_learn_projects"], json!([r"c:\code\app", r"d:\client"]));
+        assert_eq!(settings.memory.no_learn, keys);
+        assert!(!settings.memory.learns_in(keys[0]) && settings.memory.learns_in("another-project"));
+        assert_eq!(settings.values()["memory.no_learn_projects"], json!(keys));
         // A list of folders only; a bad entry changes nothing.
         assert!(settings.apply_patch(json!({ "memory.no_learn_projects": r"c:\x" }).as_object().unwrap(), &[]).is_err());
         assert!(settings.apply_patch(json!({ "memory.no_learn_projects": [""] }).as_object().unwrap(), &[]).is_err());
@@ -711,6 +727,7 @@ mod tests {
         assert!(settings.memory.no_learn.is_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn home_is_shortened_only_at_a_folder_boundary() {
         let home = Some(Path::new(r"C:\Users\Me"));
@@ -718,6 +735,17 @@ mod tests {
         assert_eq!(shorten_home(Path::new("C:/Users/Me"), home), "~");
         assert_eq!(shorten_home(Path::new(r"C:\Users\Meg\x"), home), r"C:\Users\Meg\x");
         assert_eq!(shorten_home(Path::new(r"C:\Users\Mé\x"), home), r"C:\Users\Mé\x");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn home_is_shortened_only_at_a_folder_boundary() {
+        let home = Some(Path::new("/Users/Me"));
+        assert_eq!(shorten_home(Path::new("/Users/Me/Graysense/Sessions/x"), home), "~/Graysense/Sessions/x");
+        assert_eq!(shorten_home(Path::new("/Users/Me"), home), "~");
+        assert_eq!(shorten_home(Path::new("/Users/Meg/x"), home), "/Users/Meg/x");
+        assert_eq!(shorten_home(Path::new("/Users/Mé/x"), home), "/Users/Mé/x");
+        assert_eq!(shorten_home(Path::new("/Users/me/x"), home), "/Users/me/x");
     }
 
     fn scratch(tag: &str) -> PathBuf {

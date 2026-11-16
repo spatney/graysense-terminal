@@ -20,13 +20,19 @@ export function activeMention(text: string, caret: number, selectionEnd = caret)
   return { start: match.index + match[0].indexOf('@'), end, query: match[1] ?? match[2] };
 }
 
-export function completionQuery(query: string, cwd: string, home: string): { directory: string; prefix: string } {
+export function resolvePath(query: string, cwd: string, home: string): string {
   const sep = cwd.includes('\\') ? '\\' : '/';
   let path = query.replace(/[\\/]/g, sep);
-  if (path === '~' || path.startsWith(`~${sep}`)) path = home + path.slice(1) + (path === '~' ? sep : '');
+  if (home && (path === '~' || path.startsWith(`~${sep}`))) path = home + path.slice(1);
   if (/^[a-zA-Z]:$/.test(path)) path += '\\';
   if (sep === '\\' && /^\\(?!\\)/.test(path) && /^[a-zA-Z]:/.test(cwd)) path = cwd.slice(0, 2) + path;
   if (!absolute.test(path)) path = `${cwd.replace(/[\\/]$/, '')}${sep}${path}`;
+  return path;
+}
+
+export function completionQuery(query: string, cwd: string, home: string): { directory: string; prefix: string } {
+  const sep = cwd.includes('\\') ? '\\' : '/';
+  const path = resolvePath(query, cwd, home) + (query === '~' && home ? sep : '');
   const split = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
   return { directory: path.slice(0, split + 1), prefix: path.slice(split + 1) };
 }

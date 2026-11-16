@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { act, listDir, openLink, readText } from '../../lib/api';
 import { ago, baseName, bytes } from '../../lib/format';
 import { isImagePath } from '../../lib/images';
+import { fileManager } from '../../lib/platform';
 import { focusComposer, setDock, toast, useUi } from '../../lib/store';
 import { cssVar } from '../../lib/theme';
 import type { BayDto, CanvasDto, DirEntry } from '../../lib/types';
@@ -365,7 +366,7 @@ function fileMenu(e: React.MouseEvent, bay: number, path: string, isDir: boolean
   e.preventDefault();
   const items: MenuItem[] = [
     { label: 'Open', icon: 'go-to-file', onSelect: () => void act({ type: 'openPath', path }) },
-    { label: 'Reveal in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path }) },
+    { label: `Reveal in ${fileManager}`, icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path }) },
     { label: 'Open in VS Code', icon: 'vscode', onSelect: () => void act({ type: 'openInVsCode', path }) },
     { label: 'Attach to message', icon: 'attach', onSelect: () => attachToBay(bay, path) },
     { label: 'Copy path', icon: 'copy', onSelect: () => void copyText(path, 'Path copied') },

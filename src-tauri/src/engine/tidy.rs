@@ -69,7 +69,7 @@ fn tidyable(m: &Memory) -> bool {
 fn scope_label(scope: &Scope) -> String {
     match scope {
         Scope::Global => "the user".into(),
-        Scope::Project(key) => format!("the project {}", std::path::Path::new(key).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| key.clone())),
+        Scope::Project(key) => format!("the project {}", key.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(key)),
     }
 }
 
@@ -255,6 +255,7 @@ mod tests {
     #[test]
     fn projects_are_named_for_the_model() {
         assert_eq!(scope_label(&Scope::Project("c:\\code\\graysense".into())), "the project graysense");
+        assert_eq!(scope_label(&Scope::Project("/Users/developer/graysense/".into())), "the project graysense");
         assert_eq!(scope_label(&Scope::Global), "the user");
     }
 

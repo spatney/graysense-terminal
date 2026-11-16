@@ -420,13 +420,60 @@ impl Backend {
 
 // ------------------------------------------------------------------ actor
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Default)]
+struct ExtensionHost(Arc<std::sync::OnceLock<PathBuf>>);
+
+#[cfg(target_os = "macos")]
+#[async_trait]
+impl github_copilot_sdk::extension_launch_provider::ExtensionLaunchProvider for ExtensionHost {
+    async fn resolve(
+        &self,
+        request: github_copilot_sdk::extension_launch_provider::ExtensionLaunchProviderResolveRequest,
+    ) -> github_copilot_sdk::Result<github_copilot_sdk::extension_launch_provider::ExtensionLaunchProviderResolveResult> {
+        use github_copilot_sdk::extension_launch_provider::{ExtensionLaunchProfile, ExtensionLaunchProviderResolveResult};
+        let bootstrap = self.0.get().ok_or_else(|| std::io::Error::other("Copilot extension host is not initialized"))?;
+        let node = which::which("node").ok()
+            .or_else(|| ["/opt/homebrew/bin/node", "/usr/local/bin/node"].into_iter().map(PathBuf::from).find(|p| p.is_file()))
+            .ok_or_else(|| std::io::Error::other("Node.js is required to run Copilot extensions. Install Node.js or make it available on PATH."))?;
+        Ok(ExtensionLaunchProviderResolveResult {
+            launch: Some(ExtensionLaunchProfile {
+                executable: node.to_string_lossy().into_owned(),
+                args: vec![bootstrap.to_string_lossy().into_owned()],
+                env: HashMap::from([("EXTENSION_PATH".into(), request.module_path)]),
+            }),
+        })
+    }
+}
+
 async fn connect(ui: &UiTx) -> Option<Client> {
     ui.send(Evt::Client(ClientState::Connecting));
     let info = ClientInfo::new().with_application_name("graysense").with_application_version(env!("CARGO_PKG_VERSION"));
     // MCP Apps (SEP-1865) is gated in the runtime; Graysense ships a renderer, so turn it on.
     let options = ClientOptions::default().with_client_info(info).with_env([("COPILOT_MCP_APPS", "true")]);
+    #[cfg(target_os = "macos")]
+    let extension_host = ExtensionHost::default();
+    #[cfg(target_os = "macos")]
+    let options = options.with_extension_launch_provider(extension_host.clone());
     match Client::start(options).await {
         Ok(client) => {
+            #[cfg(target_os = "macos")]
+            match extension_sdk_path(&client).await {
+                Ok(sdk) => {
+                    let bootstrap = PathBuf::from(sdk).with_file_name("preloads").join("extension_bootstrap.mjs");
+                    if extension_host.0.set(bootstrap).is_err() {
+                        unreachable!("a new client initializes its extension host once");
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("copilot extension host failed to initialize: {err}");
+                    if let Err(stop_err) = client.stop().await {
+                        tracing::warn!("copilot runtime shutdown failed: {stop_err:?}");
+                    }
+                    ui.send(Evt::Client(ClientState::Failed(err)));
+                    return None;
+                }
+            }
             tracing::info!("copilot runtime connected");
             ui.send(Evt::Client(ClientState::Ready));
             Some(client)
@@ -955,7 +1002,38 @@ fn canvas_identity() -> github_copilot_sdk::CanvasProviderIdentity {
     id
 }
 
+#[cfg(target_os = "macos")]
+async fn extension_sdk_path(client: &Client) -> Result<String, String> {
+    let runtime_dir = if let Some(program) = std::env::var_os("COPILOT_CLI_PATH").map(PathBuf::from).filter(|p| p.is_file()) {
+        let program = program.canonicalize().map_err(|e| format!("Cannot resolve Copilot runtime {}: {e}", program.display()))?;
+        program.parent().ok_or("Copilot runtime has no parent directory")?.to_path_buf()
+    } else if github_copilot_sdk::HAS_BUNDLED_CLI {
+        github_copilot_sdk::install_bundled_runtime()
+            .ok_or("Cannot locate the bundled Copilot runtime")?
+            .parent().ok_or("Bundled Copilot runtime has no parent directory")?.to_path_buf()
+    } else if let Some(dir) = std::env::var_os("COPILOT_CLI_EXTRACT_DIR") {
+        PathBuf::from(dir)
+    } else {
+        let version = client.get_status().await.map_err(|e| format!("Cannot identify the Copilot runtime: {e}"))?.version;
+        // Match the Rust SDK's version-scoped runtime extraction cache.
+        let cache_id: String = version.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+        dirs::cache_dir().ok_or("Cannot locate the Copilot runtime cache")?
+            .join("github-copilot-sdk").join("runtime").join(cache_id)
+    };
+    let sdk = runtime_dir.join("copilot-sdk");
+    if !sdk.join("index.js").is_file() || !sdk.join("extension.js").is_file()
+        || !runtime_dir.join("preloads/extension_bootstrap.mjs").is_file()
+        || !runtime_dir.join("preloads/extension_sdk_resolver.mjs").is_file()
+    {
+        return Err(format!("Copilot extension SDK is missing or incomplete at {}. Restore the SDK shipped with the selected Copilot runtime.", sdk.display()));
+    }
+    tracing::debug!(path = %sdk.display(), "using the runtime's extension SDK");
+    Ok(sdk.to_string_lossy().into_owned())
+}
+
 async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, self_tx: mpsc::UnboundedSender<Cmd>) -> Result<Session, String> {
+    #[cfg(target_os = "macos")]
+    let extension_sdk_path = extension_sdk_path(client).await?;
     let bridge = Arc::new(Bridge {
         bay,
         ui: ui.clone(),
@@ -993,6 +1071,10 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
             .with_include_sub_agent_streaming_events(false)
             .with_enable_file_change_tracking(spec.track_files)
             .with_memory(memory_config);
+        #[cfg(target_os = "macos")]
+        {
+            config = config.with_extension_sdk_path(extension_sdk_path);
+        }
         if let Some(store) = memory_store {
             config = config.with_memory_store(store);
         }
@@ -1028,6 +1110,10 @@ async fn start_session(client: &Client, bay: BayId, spec: AgentSpec, ui: UiTx, s
             .with_include_sub_agent_streaming_events(false)
             .with_enable_file_change_tracking(spec.track_files)
             .with_memory(memory_config);
+        #[cfg(target_os = "macos")]
+        {
+            config = config.with_extension_sdk_path(extension_sdk_path);
+        }
         if let Some(store) = memory_store {
             config = config.with_memory_store(store);
         }
@@ -1389,11 +1475,15 @@ impl Bridge {
         if paths.is_empty() || granted.is_empty() {
             return false;
         }
-        let norm = |p: &str| p.replace('/', "\\").trim_end_matches('\\').to_lowercase();
-        let granted: Vec<String> = granted.iter().map(|g| norm(&g.to_string_lossy())).collect();
+        let granted: Vec<(String, bool)> = granted.iter().filter_map(|g| {
+            let path = std::fs::canonicalize(g).ok()?;
+            Some((crate::memory::project_key(&path), path.is_dir()))
+        }).collect();
         paths.iter().all(|p| {
-            let p = norm(p);
-            granted.iter().any(|g| p == *g || p.starts_with(&format!("{g}\\")))
+            let Ok(path) = std::fs::canonicalize(p) else { return false };
+            let p = crate::memory::project_key(&path);
+            let separator = std::path::MAIN_SEPARATOR;
+            granted.iter().any(|(g, directory)| p == *g || *directory && p.starts_with(&format!("{}{separator}", g.trim_end_matches(separator))))
         })
     }
     /// Canvas tools that only drive Graysense's own native canvases have no side
@@ -2105,6 +2195,189 @@ async fn one_shot(client: &Client, model: Option<String>, system: &str, schema: 
 mod tests {
     use super::*;
     use github_copilot_sdk::rpc::AccountQuotaSnapshot;
+
+    fn attachment_bridge(path: PathBuf) -> Bridge {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        Bridge {
+            bay: 1,
+            ui: UiTx::new(tx),
+            auto: Arc::new(AtomicBool::new(false)),
+            canvases: Default::default(),
+            granted: Arc::new(parking_lot::Mutex::new(vec![path])),
+            memory: None,
+        }
+    }
+
+    #[test]
+    fn attached_paths_use_native_identity_without_granting_neighbors_or_symlink_escapes() {
+        let dir = std::env::temp_dir().join(format!("gs-granted-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("attached")).unwrap();
+        std::fs::create_dir_all(dir.join("attached-other")).unwrap();
+        let file = dir.join("attached").join("Mac file.txt");
+        let other = dir.join("attached-other").join("other.txt");
+        std::fs::write(&file, "synthetic attachment").unwrap();
+        std::fs::write(&other, "not attached").unwrap();
+        let bridge = attachment_bridge(dir.join("attached"));
+        let read = |p: &std::path::Path| json!({ "promptRequest": { "kind": "read", "path": p } });
+        assert!(bridge.covers_attachments(&read(&file.canonicalize().unwrap())));
+        assert!(!bridge.covers_attachments(&read(&other)));
+        assert!(!bridge.covers_attachments(&read(&dir.join("attached/../attached-other/other.txt"))));
+        assert!(!bridge.covers_attachments(&read(&dir.join("missing"))));
+        let file_bridge = attachment_bridge(file.clone());
+        assert!(file_bridge.covers_attachments(&read(&file)));
+        assert!(!file_bridge.covers_attachments(&read(&other)));
+        #[cfg(unix)]
+        {
+            let escape = dir.join("attached/escape.txt");
+            std::os::unix::fs::symlink(&other, &escape).unwrap();
+            assert!(!bridge.covers_attachments(&read(&escape)));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    #[ignore = "requires an authenticated Copilot runtime; creates and resumes a session without inference"]
+    async fn a_live_production_session_starts_and_resumes_without_inference() {
+        let dir = std::env::temp_dir().join(format!("gs-start-{}", uuid::Uuid::new_v4()));
+        let extension_dir = dir.join(".github/extensions/mac-start-smoke");
+        std::fs::create_dir_all(&extension_dir).unwrap();
+        std::fs::write(extension_dir.join("extension.mjs"), r#"
+import { joinSession } from "@github/copilot-sdk/extension";
+import { writeFile } from "node:fs/promises";
+await joinSession({ tools: [] });
+await writeFile(new URL("./started.txt", import.meta.url), "GRAYSENSE_EXTENSION_HOST_OK");
+"#).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ui = UiTx::new(tx);
+        let client = connect(&ui).await.expect("Copilot runtime connects");
+        let (self_tx, _self_rx) = mpsc::unbounded_channel();
+        let spec = |resume| AgentSpec {
+            cwd: dir.clone(),
+            model: None,
+            effort: None,
+            context_tier: None,
+            mode: Mode::Interactive,
+            prompt: None,
+            files: Vec::new(),
+            auto_approve: Arc::new(AtomicBool::new(false)),
+            resume,
+            granted: Default::default(),
+            memory: None,
+            track_files: true,
+            instructions: None,
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            let session = start_session(&client, 1, spec(None), ui.clone(), self_tx.clone()).await
+                .map_err(|e| format!("create: {e}"))?;
+            let id = session.id().clone();
+            let resumed = async {
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let extensions = session.rpc().extensions().list().await.map_err(|e| e.to_string())?;
+                        if let Some(extension) = extensions.extensions.iter().find(|e| e.id == "project:mac-start-smoke") {
+                            match extension.status {
+                                github_copilot_sdk::rpc::ExtensionStatus::Running if extension_dir.join("started.txt").is_file() => return Ok::<(), String>(()),
+                                github_copilot_sdk::rpc::ExtensionStatus::Failed => return Err("The synthetic extension failed to start".into()),
+                                _ => {}
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }).await.map_err(|_| "The synthetic extension did not start within 10 seconds".to_owned())??;
+                if std::fs::read_to_string(extension_dir.join("started.txt")).map_err(|e| e.to_string())? != "GRAYSENSE_EXTENSION_HOST_OK" {
+                    return Err("The real extension process did not write its smoke marker".into());
+                }
+                session.log("GRAYSENSE_PRODUCTION_START_SMOKE", None).await.map_err(|e| format!("persist smoke log: {e}"))?;
+                let session = start_session(&client, 1, spec(Some(id.to_string())), ui, self_tx).await
+                    .map_err(|e| format!("resume: {e}"))?;
+                let events = session.get_events().await.map_err(|e| e.to_string())?;
+                if !events.iter().any(|e| e.data.to_string().contains("GRAYSENSE_PRODUCTION_START_SMOKE")) {
+                    return Err("The smoke log is missing after resuming the live session".into());
+                }
+                session.disconnect().await.map_err(|e| e.to_string())
+            }.await;
+            client.delete_session(&id).await.map_err(|e| e.to_string())?;
+            resumed
+        }).await.map_err(|_| "Production startup smoke check timed out after 60 seconds".to_owned()).and_then(|result| result);
+        client.stop().await.expect("Copilot runtime stops");
+        std::fs::remove_dir_all(&dir).unwrap();
+        result.expect("production session configuration supports create and resume");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an authenticated Copilot CLI and makes one inference request"]
+    async fn a_live_copilot_turn_returns_a_synthetic_smoke_marker() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let client = connect(&UiTx::new(tx)).await.expect("Copilot CLI connects");
+        let result = one_shot(
+            &client,
+            None,
+            "Return only the JSON object requested by the user. Do not use tools.",
+            json!({ "type": "object", "properties": { "marker": { "type": "string" } }, "required": ["marker"], "additionalProperties": false }),
+            "Return an object with marker set to GRAYSENSE_MAC_SMOKE_OK.".into(),
+        ).await;
+        client.stop().await.expect("Copilot runtime stops");
+        let response: Value = serde_json::from_str(&result.expect("the agent completes a turn")).expect("structured response");
+        assert_eq!(response["marker"], "GRAYSENSE_MAC_SMOKE_OK");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an authenticated Copilot CLI and makes one inference request"]
+    async fn a_live_attachment_and_session_history_survive_a_runtime_restart() {
+        let dir = std::env::temp_dir().join(format!("gs-live-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Mac smoke attachment.txt");
+        let marker = format!("GS_{}", uuid::Uuid::new_v4().simple());
+        std::fs::write(&file, format!("The smoke-test marker is {marker}.\n")).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ui = UiTx::new(tx);
+        let client = connect(&ui).await.expect("Copilot CLI connects");
+        let servers = client.rpc().mcp().config().list().await.expect("MCP configuration").servers.into_keys();
+        struct AttachedOnly(Bridge);
+        #[async_trait]
+        impl PermissionHandler for AttachedOnly {
+            async fn handle(&self, _sid: SessionId, _rid: RequestId, data: PermissionRequestData) -> PermissionResult {
+                if data.managed_approval_required != Some(true) && self.0.covers_attachments(&data.extra) {
+                    PermissionResult::approve_once()
+                } else {
+                    PermissionResult::reject(Some("Only the synthetic attachment may be read.".into()))
+                }
+            }
+        }
+        let session = client.create_session(
+            SessionConfig::default()
+                .with_client_name(CURATOR_CLIENT)
+                .with_working_directory(&dir)
+                .with_enable_config_discovery(false)
+                .with_skip_custom_instructions(true)
+                .with_enable_skills(false)
+                .with_memory(github_copilot_sdk::MemoryConfiguration::disabled())
+                .with_disabled_mcp_servers(servers.chain(["github-mcp-server".to_owned()]))
+                .with_available_tools(["view"])
+                .with_permission_handler(Arc::new(AttachedOnly(attachment_bridge(file.clone())))),
+        ).await.expect("a temporary read-only session");
+        let id = session.id().clone();
+        let result = session.send_and_wait(
+            github_copilot_sdk::MessageOptions::new("Read the attached text file using view and reply with only its smoke-test marker. Do not modify files or run commands.")
+                .with_attachments(vec![github_copilot_sdk::Attachment::File { path: file.clone(), display_name: Some("Mac smoke attachment.txt".into()), line_range: None }])
+                .with_wait_timeout(std::time::Duration::from_secs(120)),
+        ).await;
+        session.disconnect().await.expect("session disconnects");
+        client.stop().await.expect("the first runtime stops");
+        let client = connect(&ui).await.expect("a fresh runtime connects");
+        let resumed = client.resume_session(ResumeSessionConfig::new(id.clone()).with_permission_handler(Arc::new(DenyAll)))
+            .await.expect("the session resumes after runtime restart");
+        let history = resumed.get_events().await;
+        resumed.disconnect().await.expect("resumed session disconnects");
+        client.delete_session(&id).await.expect("remove the synthetic test session");
+        client.stop().await.expect("the resumed runtime stops");
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+        let response = result.expect("the attachment turn completes").expect("an assistant response");
+        assert!(response.data["content"].as_str().unwrap_or("").contains(&marker), "the assistant reads the synthetic attachment");
+        assert!(history.expect("restored history").iter().any(|e| e.event_type == "assistant.message" && e.data["content"].as_str().is_some_and(|s| s.contains(&marker))));
+    }
 
     fn snapshots(q: AccountQuotaSnapshot) -> HashMap<String, AccountQuotaSnapshot> {
         HashMap::from([("premium_interactions".to_owned(), q)])

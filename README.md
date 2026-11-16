@@ -231,6 +231,106 @@ npm run typecheck
 cd src-tauri; cargo test    # core tests
 ```
 
+### macOS (experimental)
+
+For a source build, install the Xcode Command Line Tools (`xcode-select --install`), Node.js
+20+, Rust 1.94+ and the Copilot CLI. Sign in with `copilot login`, then run these commands from
+your usual login shell so the app inherits the same tools and environment:
+
+```sh
+npm ci
+npm run tauri dev
+```
+
+To build a standalone local app without a running development server:
+
+```sh
+npm run tauri build -- --debug --bundles app --config '{"bundle":{"active":true}}'
+```
+
+The bundle is `src-tauri/target/debug/bundle/macos/Graysense.app`; copy it to
+`~/Applications` to keep it available in Finder. This is a local debug build, not a signed,
+notarized Mac release. Installed-release updates and desktop notifications are not yet
+supported on Mac.
+
+Mac bring-up changes: preserve Unix separators and case in project memory keys, shorten
+home-folder paths using native separators, handle Windows and Unix project names in memory
+tidying, and make the related core test fixtures portable. Attachment read approvals compare
+resolved native paths, including macOS's `/var` and `/private/var` aliases, without granting
+neighboring folders or symlink escapes.
+
+**File integration:** files open with their associated Mac app; folders open in Finder.
+Reveal selects files and app bundles in Finder. Scripts, installers, app bundles and Unix
+executables open in VS Code (including standard installs without `code` on `PATH`) or a text
+editor instead of executing. Failures appear as error toasts.
+`/attach` and `/cd` resolve absolute Unix paths, relative paths and home paths using the
+same native path rules as file completion. Image previews accept absolute Unix image paths.
+
+**Keyboard shortcuts:** app commands use Command on Mac; shortcut hints adapt throughout the
+UI. The terminal keeps Control for shell commands, including Ctrl+C to interrupt.
+
+| Action | Mac shortcut |
+| --- | --- |
+| Search sessions and files | Cmd+K |
+| Command palette | Cmd+Shift+P |
+| Find in conversation or terminal | Cmd+F |
+| Sessions | Cmd+Shift+Y (avoids macOS Hide Others) |
+| Next / previous bay | Ctrl+Tab / Ctrl+Shift+Tab |
+| Focus bay 1-9 | Cmd+Option+1-9 |
+| Copy / paste terminal text | Cmd+C / Cmd+V |
+| Select all terminal text | Cmd+A |
+| Queue a message / save an edited note | Cmd+Enter |
+| Show all shortcuts | Cmd+/ |
+
+**Verified:** the Apple Silicon bundle launches and connects to Copilot. Native composer
+Cmd+C/V, Cmd+K search, and native text-file attachment selection work. Terminal checks cover
+creation, a rendered shell prompt, command input/output, Cmd+A/C/V, Ctrl+C interruption and
+Cmd+F. Sessions toggling, forward/reverse bay switching, Cmd+Option+1/2 and the shortcut sheet
+also work in the native app. Automated checks
+exercise a real Copilot turn, a synthetic file attachment and session history across a Copilot
+runtime restart, a real login shell through the PTY service, native file-command routing, and
+Mac/Windows shortcut handling. Live SDK checks are opt-in because they need authentication
+and consume inference:
+
+```sh
+cd src-tauri
+cargo test --locked a_live_ -- --ignored
+```
+
+**Extension startup:** Mac sessions explicitly use the JavaScript SDK and preloads shipped
+beside the selected Copilot runtime, and register a Node.js extension launcher. This fixes the
+missing `extensionSdkPath` and extension-launch-provider errors without disabling extensions.
+Runtime overrides (`COPILOT_CLI_PATH` / `COPILOT_CLI_EXTRACT_DIR`) must include the matching
+`copilot-sdk/` and `preloads/` assets. Node is discovered on `PATH`, then at standard Homebrew
+locations. Missing assets or Node produce explicit errors.
+
+An opt-in test exercises the production create/resume configuration and launches a synthetic
+extension that imports the SDK and joins the session. It makes no inference requests:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml \
+  a_live_production_session_starts_and_resumes_without_inference -- --ignored
+```
+
+The test resumes a live session; it does not verify conversation restoration after app restart.
+Separate native smoke checks passed a synthetic attachment turn with the expected assistant
+response, then confirmed that the prompt, attachment and response restore after fully quitting
+and reopening the installed app.
+
+Native smoke checks also cover folder opening in Finder and VS Code, text-file opening in
+TextEdit and VS Code, and opening a harmless `.command` file in the editor without executing it.
+An absolute Unix `/attach` image path produces a thumbnail and working preview; Open launches
+the PNG in Preview. Copying an image in Preview and pasting in the composer creates a working
+image attachment; Reveal selects that file in Finder. `/cd` accepts absolute, relative parent,
+and home paths, including spaces. After quitting and reopening, both agent and terminal bays
+and their layout return, and the terminal starts a fresh shell.
+
+**Remaining Mac limitations:** nested Files-dock breadcrumbs still construct Windows-style
+paths and need a separate portability fix; root-folder and file opening were checked instead.
+Also check CLI discovery from Finder on a clean Mac: its `PATH` can differ from a login shell.
+Signing, notarization, release packaging, updates and native notifications remain separate
+distribution work.
+
 `GRAYSENSE_CONFIG_DIR` points the app at another profile (settings, memory, workspace), handy for
 trying things without touching your own. `GRAYSENSE_LOG=debug` turns up logging
 (`%APPDATA%\Graysense\graysense.log`). `GRAYSENSE_SYNC_REMOTE` points sync at a folder of bare

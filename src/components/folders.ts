@@ -1,5 +1,6 @@
 import { act, changeFolder, learnsIn, newAgent, newShell, setProjectLearning, setSide } from '../lib/api';
 import { baseName, shortPath } from '../lib/format';
+import { fileManager } from '../lib/platform';
 import { openOverlay, useUi } from '../lib/store';
 import type { BayDto } from '../lib/types';
 import { type MenuItem, copyText } from './ui';
@@ -50,7 +51,7 @@ export function agentFolderItems(bay: BayDto): MenuItem[] {
       { label: 'Start without a worktree', icon: 'folder', tip: `Work in ${w.repo} itself`, onSelect: () => move(w.repo) },
       folderSubmenu('Start in a folder', 'arrow-swap', move, pick),
       { sep: true },
-      { label: 'Reveal repository in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: w.repo }) },
+      { label: `Reveal repository in ${fileManager}`, icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: w.repo }) },
     ];
   }
   if (bay.agent?.deferred) {
@@ -65,7 +66,7 @@ export function agentFolderItems(bay: BayDto): MenuItem[] {
     ...worktree,
     folderSubmenu('Change folder', 'arrow-swap', move, pick, bay.cwd),
     { sep: true },
-    { label: 'Reveal in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: bay.cwd }) },
+    { label: `Reveal in ${fileManager}`, icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: bay.cwd }) },
     { label: 'Open in VS Code', icon: 'vscode', onSelect: () => void act({ type: 'openInVsCode', path: bay.cwd }) },
     { label: 'New terminal here', icon: 'terminal', onSelect: () => void newShell(bay.cwd) },
     { label: 'New agent here', icon: 'add', onSelect: () => void act({ type: 'newAgent', dir: bay.cwd }) },

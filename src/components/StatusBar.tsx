@@ -1,6 +1,7 @@
 import { act, restartToUpdate, setSide } from '../lib/api';
 import { agoLong, bytes, human, modelLabel } from '../lib/format';
 import { quotaStatus } from '../lib/quota';
+import { fileManager } from '../lib/platform';
 import { focusComposer, openOverlay, useUi } from '../lib/store';
 import type { QuotaDto } from '../lib/types';
 import { showSyncSettings } from './panels/SyncCard';
@@ -78,7 +79,7 @@ export function StatusBar() {
         </span>
       ) : null}
       {focused && (
-        <button type="button" className="status-item" data-tip={`${focused.cwd} · reveal in File Explorer`} onClick={() => void act({ type: 'revealPath', path: focused.cwd })}>
+        <button type="button" className="status-item" data-tip={`${focused.cwd} · reveal in ${fileManager}`} onClick={() => void act({ type: 'revealPath', path: focused.cwd })}>
           <Icon name="folder" /> {focused.folder}
         </button>
       )}

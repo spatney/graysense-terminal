@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { act, pickFolder } from '../../lib/api';
 import { startMissionDrag, useDrag } from '../../lib/drag';
 import { ago, baseName } from '../../lib/format';
+import { fileManager, shortcutLabel } from '../../lib/platform';
 import { focusComposer, useUi } from '../../lib/store';
 import type { BayDto, BayId, MissionDto, MissionStatus } from '../../lib/types';
 import { Icon, type MenuItem, showMenu, useAutosize } from '../ui';
@@ -309,7 +310,7 @@ function MissionCard({ m, bay, sendTo, fresh, onDelegated }: CardProps) {
 
   const folderMenu = (el: Element, dir: string) =>
     openMenu(el, [
-      { label: 'Reveal in File Explorer', icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: dir }) },
+      { label: `Reveal in ${fileManager}`, icon: 'folder-opened', onSelect: () => void act({ type: 'revealPath', path: dir }) },
       { label: 'Change folder…', icon: 'folder', onSelect: () => void chooseFolder(m) },
       { label: 'Clear folder', icon: 'close', onSelect: clearDir },
     ]);
@@ -472,7 +473,7 @@ function MissionEditor({ m, onClose }: { m: MissionDto; onClose: () => void }) {
         onChange={(e) => setNotes(e.target.value)}
       />
       <div className="msn-edit-foot">
-        <span className="msn-edit-hint">Ctrl+Enter to save</span>
+        <span className="msn-edit-hint">{shortcutLabel('Ctrl+Enter to save')}</span>
         <button type="button" className="btn ghost sm" onClick={onClose}>
           Cancel
         </button>
